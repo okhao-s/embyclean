@@ -1,0 +1,325 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2338bdf8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5'/></svg>">
+<title>EmbyCleaner</title><script src="https://cdn.tailwindcss.com"></script><style>
+/* 🚀 UI Theme: Obsidian Compact (v1.5 Blacklist Fix) */
+body { background: radial-gradient(circle at top right, #1e293b, #020617); color: #e2e8f0; font-family: 'Segoe UI', system-ui, sans-serif; height: 100vh; display: flex; overflow: hidden; }
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+
+.sidebar { width: 280px; flex-shrink: 0; background: rgba(2, 6, 23, 0.8); backdrop-filter: blur(20px); border-right: 1px solid rgba(255, 255, 255, 0.05); display: flex; flex-direction: column; transition: 0.3s; padding-top: 1.5rem; }
+@media (max-width: 1024px) { .sidebar { width: 240px; } }
+@media (max-width: 768px) { body { flex-direction: column; } .sidebar { width: 100%; height: auto; flex-direction: row; border-right: none; border-bottom: 1px solid rgba(255,255,255,0.05); padding: 10px; overflow-x: auto; } .sidebar .status-box, .sidebar .side-stats-card, .sidebar .text-slate-500 { display: none !important; } .main { flex: 1; overflow: hidden; } }
+
+.main { flex: 1; display: flex; flex-direction: column; height: 100%; overflow: hidden; position: relative; }
+.content { flex: 1; overflow-y: auto; padding: 2rem; position: relative; scroll-behavior: smooth; }
+
+.nav-item { padding: 12px 20px; cursor: pointer; color: #94a3b8; font-weight: 600; display: flex; align-items: center; gap: 12px; margin: 4px 16px; border-radius: 10px; transition: 0.2s; font-size: 14px; }
+.nav-item:hover { background: rgba(255, 255, 255, 0.03); color: #f1f5f9; }
+.nav-item.active { background: rgba(56, 189, 248, 0.1); color: #38bdf8; border-color: rgba(56, 189, 248, 0.2); }
+
+.card { background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 16px; padding: 1.5rem; margin-bottom: 1.5rem; backdrop-filter: blur(12px); box-shadow: 0 10px 30px -10px rgba(0,0,0,0.3); }
+
+.lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 1rem; }
+.lib-card { aspect-ratio: 16/9; background: #020617; border-radius: 12px; overflow: hidden; position: relative; cursor: pointer; border: 2px solid rgba(255,255,255,0.05); transition: 0.3s; }
+.lib-card img { width: 100%; height: 100%; object-fit: cover; opacity: 0.8; transition: 0.3s; }
+.lib-card:hover img { opacity: 1; transform: scale(1.05); }
+.lib-card.selected { border-color: #38bdf8; box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.3); }
+.lib-card.selected::after { content: '✅'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 2rem; background: rgba(0,0,0,0.4); }
+.lib-name { position: absolute; bottom: 0; inset-x: 0; padding: 8px; background: linear-gradient(to top, #000, transparent); text-align: center; font-size: 12px; font-weight: 600; color: #fff; transform: translateY(100%); transition: 0.3s; opacity: 0; }
+.lib-card:hover .lib-name { transform: translateY(0); opacity: 1; }
+
+.mode-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; }
+@media (min-width: 640px) { .mode-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (min-width: 1280px) { .mode-grid { grid-template-columns: repeat(6, 1fr); } }
+.mode-btn { 
+    height: 110px; 
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.5rem; 
+    border-radius: 16px; border: 1px solid rgba(255,255,255,0.08); 
+    background: linear-gradient(145deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01)); 
+    color: #94a3b8; transition: 0.3s; 
+}
+.mode-btn:hover { background: rgba(255, 255, 255, 0.06); color: #fff; border-color: rgba(255,255,255,0.2); transform: translateY(-2px); }
+.mode-btn.active { background: #0ea5e9; color: white; border-color: transparent; box-shadow: 0 5px 15px -3px rgba(14, 165, 233, 0.5); transform: scale(1.02); }
+.mode-icon { font-size: 2rem; }
+
+.result-container { max-width: 1400px; margin: 0 auto; }
+.res-item { display: flex; align-items: center; padding: 1rem 1.25rem; background: rgba(15, 23, 42, 0.4); border: 1px solid rgba(255,255,255,0.03); margin-bottom: 0.5rem; border-radius: 12px; transition: 0.2s; }
+.res-item:hover { background: rgba(255,255,255,0.03); border-color: rgba(255,255,255,0.1); }
+.res-item.checked { background: rgba(244, 63, 94, 0.08); border-color: rgba(244, 63, 94, 0.4); }
+
+.btn { padding: 8px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px; transition: 0.2s; font-size: 13px; }
+.btn-p { background: #38bdf8; color: #0f172a; } .btn-p:hover { background: #7dd3fc; box-shadow: 0 0 15px rgba(56, 189, 248, 0.3); }
+.btn-g { background: rgba(255,255,255,0.05); color: #94a3b8; border: 1px solid rgba(255,255,255,0.1); } .btn-g:hover { background: rgba(255,255,255,0.1); color: #fff; }
+.btn-d { background: #f43f5e; color: #fff; } .btn-d:hover { background: #fb7185; box-shadow: 0 0 15px rgba(244, 63, 94, 0.3); }
+
+.btn-group-item { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); color: #94a3b8; font-size: 11px; padding: 6px 12px; border-radius: 6px; transition: 0.2s; font-weight: 600; cursor: pointer; display: inline-block; margin-right: 8px; margin-bottom: 4px; }
+.btn-group-item:hover { border-color: #38bdf8; color: #fff; background: rgba(56, 189, 248, 0.15); box-shadow: 0 0 10px rgba(56, 189, 248, 0.2); }
+
+.status-box { padding: 1.25rem; border-radius: 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); margin: 16px 20px; }
+.side-stats-card { margin: 0 20px 20px 20px; background: linear-gradient(145deg, rgba(255,255,255,0.05), rgba(255,255,255,0.01)); border-radius: 12px; padding: 16px 20px; border: 1px solid rgba(255,255,255,0.05); backdrop-filter: blur(10px); }
+.stat-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+.stat-label { font-size: 10px; color: #94a3b8; font-weight: bold; letter-spacing: 0.5px; }
+.stat-val { font-size: 18px; font-weight: 800; color: #fff; font-family: monospace; }
+.stat-val-lg { font-size: 22px; font-weight: 900; color: #38bdf8; }
+.divider { height: 1px; background: rgba(255,255,255,0.1); margin: 12px 0; }
+
+.dot-main { width: 8px; height: 8px; border-radius: 50%; background: #475569; }
+.dot-online { background: #10b981; box-shadow: 0 0 8px #10b981; animation: pulse 2s infinite; }
+@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+
+#modal, #conf-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); z-index: 60; display: none; align-items: center; justify-content: center; }
+.modal-card { background: #0f172a; border: 1px solid rgba(255,255,255,0.1); padding: 32px; width: 90%; max-width: 500px; border-radius: 20px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); }
+#modal.open, #conf-modal.open { display: flex; }
+
+.path-base { color: #64748b; font-family: monospace; font-size: 10px; }
+.path-diff { color: #fb923c; font-weight: bold; font-family: monospace; font-size: 11px; background: rgba(251, 146, 60, 0.1); padding: 1px 4px; border-radius: 4px; margin-left: 4px; }
+
+.group-header { display: flex; align-items: center; gap: 12px; }
+.group-check { width: 18px; height: 18px; accent-color: #38bdf8; cursor: pointer; flex-shrink: 0; display: block; }
+.ign-check { width: 18px; height: 18px; accent-color: #38bdf8; cursor: pointer; flex-shrink: 0; display: block; }
+
+input { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); padding: 10px; border-radius: 8px; color: #fff; outline: none; transition: 0.2s; font-size: 13px; }
+input:focus { border-color: #38bdf8; box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2); }
+#toast-box { position: fixed; top: 24px; right: 24px; z-index: 100; display: flex; flex-direction: column; gap: 8px; }
+.toast { background: rgba(15, 23, 42, 0.9); border-left: 4px solid #38bdf8; color: #fff; padding: 12px 20px; border-radius: 8px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3); backdrop-filter: blur(10px); font-size: 13px; }
+.page { display: none; width: 100%; animation: fadePage 0.3s ease; } .page.active { display: block; }
+@keyframes fadePage { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+</style></head><body>
+<div id="loader"><div class="spinner"></div></div><div id="toast-box"></div>
+
+<div id="conf-modal"><div class="modal-card text-center">
+    <div id="conf-icon" class="text-6xl mb-6">⚠️</div>
+    <h3 id="conf-title" class="text-2xl font-bold mb-4 text-white"></h3>
+    <p id="conf-desc" class="text-slate-400 mb-10 text-lg"></p>
+    <div class="flex gap-4"><button class="btn btn-g flex-1 py-4" onclick="closeConf()">取消</button><button id="conf-yes" class="btn btn-p flex-1 py-4 font-bold">确定执行</button></div>
+</div></div>
+
+<div id="modal"><div class="modal-card"><h3 id="m-title" class="text-2xl font-bold mb-8 text-white">计划配置</h3><div class="space-y-6"><div><label class="text-xs text-slate-400 mb-2 block font-bold">名称</label><input id="m-name"></div><div><label class="text-xs text-slate-400 mb-2 block font-bold">Cron 表达式</label><input id="m-cron"></div><input type="hidden" id="m-id"><input type="hidden" id="m-mode"><input type="hidden" id="m-libs"></div><div class="flex gap-4 mt-10"><button class="btn btn-g flex-1 py-4" onclick="closeModal()">取消</button><button class="btn btn-p flex-1 py-4 font-bold" onclick="submitTask()">💾 保存</button></div></div></div>
+
+<div class="sidebar">
+ <div style="padding:24px 0 0" class="flex-shrink-0">
+    <div class="text-2xl font-bold px-8 mb-2 flex items-center gap-3 tracking-wide">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+        <span class="text-white">Emby<span class="text-sky-400">Cleaner</span></span>
+    </div>
+    <div class="status-box">
+        <div class="flex items-center gap-4 mb-3">
+            <div id="dot" class="dot-main"></div>
+            <span id="st-name" class="font-bold text-white text-sm truncate">连接检测...</span>
+        </div>
+        <div class="text-xs text-slate-400 font-mono space-y-2">
+            <div id="st-ver">版本: --</div>
+            <div id="st-user" class="text-sky-400">用户: --</div>
+        </div>
+    </div>
+    
+    <div class="side-stats-card">
+        <div class="stat-row"><span class="stat-label">元数据数量</span><span class="stat-val text-white" id="sb-loc">0</span></div>
+        <div class="stat-row"><span class="stat-label">已清理</span><span class="stat-val text-rose-400" id="sb-cln">0</span></div>
+        <div class="divider"></div>
+        <div><div class="stat-label mb-1">释放空间</div><div class="stat-val-lg" id="sb-spc">0 GB</div></div>
+    </div>
+    
+    <div class="px-5 mb-6">
+        <button id="btn-sync-side" class="btn btn-p w-full py-3 text-sm font-bold shadow-lg shadow-sky-500/20" onclick="sync()">🔄 立即同步元数据</button>
+        <div id="sync-state-display" class="text-xs text-center mt-2 text-slate-500 font-mono opacity-80 h-4"></div>
+    </div>
+ </div>
+
+ <div class="flex-1 py-2 px-2 space-y-1 overflow-y-auto">
+    <div class="nav-item active" onclick="nav('cleaner',this)"><span>清理中心</span></div>
+    <div class="nav-item" onclick="nav('logs',this)"><span>日志中心</span></div>
+    <div class="nav-item" onclick="nav('settings',this)"><span>系统配置</span></div>
+ </div>
+ <div class="p-6 text-[10px] text-slate-500 font-mono border-t border-white/5 flex flex-col gap-1">
+    <div class="flex justify-between items-center"><span>v1.0</span><span class="text-sky-500">Release</span></div>
+    <div class="text-rose-500 scale-90 origin-left font-bold">⚠️ 程序未做任何加密 不建议映射公网</div>
+ </div>
+</div>
+
+<div class="main">
+ <div id="content-area" class="content">
+  <div id="p-cleaner" class="page active result-container">
+   <div class="card"><h2 class="text-xl font-bold mb-6 text-white">1. 选择媒体库</h2><div id="libs" class="lib-grid">读取中...</div></div>
+   <div class="card"><h2 class="text-xl font-bold mb-6 text-white">2. 扫描模式</h2>
+    <div class="mode-grid mb-8">
+     <button class="mode-btn" onclick="mode('av',this)"><span class="mode-icon">🔞</span><span class="text-xs font-bold">番号查重</span></button>
+     <button class="mode-btn" onclick="mode('smart',this)"><span class="mode-icon">🧠</span><span class="text-xs font-bold">智能洗版</span></button>
+     <button class="mode-btn" onclick="mode('size',this)"><span class="text-4xl">⚖️</span><span class="text-xs font-bold">同大查重</span></button>
+     <button class="mode-btn" onclick="mode('duration',this)"><span class="mode-icon">⏳</span><span class="text-xs font-bold">时长查重</span></button>
+     <button class="mode-btn" onclick="mode('noposter',this)"><span class="mode-icon">🖼️</span><span class="text-xs font-bold">缺失封面</span></button>
+     <button class="mode-btn" onclick="mode('tiny',this)"><span class="mode-icon">🐜</span><span class="text-xs font-bold">极小文件</span></button>
+    </div>
+    <div id="opt-t" class="hidden flex justify-center mb-8 items-center gap-4 text-slate-400 font-bold bg-black/20 p-4 rounded-xl border border-white/5 mx-auto w-fit">
+      大小 < <input type="number" id="inp-t" value="100" class="w-24 text-center text-xl text-sky-400 font-mono"> MB &nbsp;&nbsp;|&nbsp;&nbsp; 时长 < <input type="number" id="inp-d" value="0" class="w-24 text-center text-xl text-sky-400 font-mono"> 秒
+    </div>
+    <div class="flex justify-center gap-6"><button class="btn btn-p px-16 py-6 text-2xl shadow-2xl shadow-sky-500/20" onclick="scan()">🔍 开始扫描</button><button class="btn btn-g px-10 py-6 text-xl border-dashed" onclick="openAddModal()">➕ 添加计划</button></div>
+   </div>
+  </div>
+
+  <div id="p-results" class="page result-container">
+   <div class="sticky top-0 bg-[#020617]/95 backdrop-blur-xl z-20 pb-4 border-b border-white/5 mb-6 flex flex-wrap justify-between items-center pt-2 px-2">
+    <div class="flex gap-6 items-center flex-shrink-0"><button class="btn btn-g" onclick="nav('cleaner')">⬅ 返回</button><span class="text-slate-400">共找到 <b id="rc" class="text-white text-xl">0</b> 个项目</span></div>
+    <div id="tb" class="flex flex-wrap gap-2"></div>
+   </div>
+   <div id="rbox" class="flex flex-col gap-4"></div>
+   <div class="py-10 flex justify-center gap-6 items-center"><button class="btn btn-g px-10 py-4" onclick="pg(-1)">⬅</button><span class="bg-white/5 px-8 py-3 rounded-2xl font-bold text-sky-400 font-mono">Page <span id="pcn">1</span> / <span id="ptn">1</span></span><button class="btn btn-g px-10 py-4" onclick="pg(1)">➡</button></div>
+   <div id="act-bar" class="fixed bottom-12 right-12 flex gap-4 hidden z-50">
+      <button id="btn-ignore" class="btn btn-o bg-orange-500 text-white shadow-lg shadow-orange-500/30" onclick="ignoreItems()">🚫 忽略</button>
+      <button id="btn-refresh" class="btn btn-p shadow-lg shadow-sky-500/30" onclick="refreshItems()">🔄 重新刮削</button>
+      <button id="btn-del" class="btn btn-d shadow-lg shadow-rose-500/30" onclick="del()">🗑️ 删除选中 (<span id="dn">0</span>)</button>
+   </div>
+  </div>
+
+  <div id="p-logs" class="page result-container"><div class="flex justify-between items-center mb-6"><h1 class="text-2xl font-bold text-white">系统日志</h1><button class="btn btn-g" onclick="clearLogs()">🗑️ 清空</button></div><div class="card bg-black/50 font-mono h-[70vh] overflow-auto p-8 leading-relaxed text-sm text-slate-300 border-white/5" id="lbox"></div></div>
+
+  <div id="p-settings" class="page result-container"><div class="grid grid-cols-1 xl:grid-cols-2 gap-10">
+   <div class="card h-fit flex flex-col">
+    <h2 class="text-2xl font-bold mb-8 text-white border-b border-white/10 pb-4">媒体库配置</h2>
+    <div class="space-y-6 flex-1">
+     <div><label class="block text-slate-400 mb-2 font-bold text-xs uppercase tracking-wider">Emby 地址</label><input id="ch" placeholder="http://ip:8096"></div>
+     <div class="grid grid-cols-2 gap-6"><div><label class="block text-slate-400 mb-2 font-bold text-xs uppercase tracking-wider">用户名</label><input id="cu"></div><div><label class="block text-slate-400 mb-2 font-bold text-xs uppercase tracking-wider">密码</label><input type="password" id="cp"></div></div>
+     <div><label class="block text-slate-400 mb-2 font-bold text-xs uppercase tracking-wider">通知 Webhook</label><div class="flex gap-3"><input id="cw" class="flex-1"><button class="btn btn-g px-6" onclick="testWebhook()">Test</button></div></div>
+     <button class="btn btn-p w-full py-4 text-lg font-bold mt-4" onclick="save()">💾 保存配置</button>
+     <div class="flex items-center gap-4 mt-4 bg-white/5 p-4 rounded-xl border border-white/5"><div class="flex-1"><label class="block text-xs font-bold text-slate-500 mb-1">全量更新定时</label><input id="sync-cron-dash" placeholder="0 4 * * *" class="text-xs p-3"></div><button class="btn btn-g h-full px-6 text-xs" onclick="saveSyncDash()">更新计划</button></div>
+     <div class="mt-8 pt-8 border-t border-white/5 space-y-3"><h3 class="text-xs font-bold text-slate-400 uppercase">Webhook JSON 示例</h3><div class="bg-black/40 p-4 rounded-xl font-mono text-[11px] text-slate-400 border border-white/5 leading-relaxed tracking-wide"><div class="mb-2 text-sky-400">支持 MP 消息转发插件:</div><div class="break-all select-all">http://10.10.10.251:3000/api/v1/plugin/MsgNotify/send_json?apikey=mp秘钥</div></div></div>
+    </div>
+   </div>
+   <div class="flex flex-col gap-10 h-full">
+      <div class="card h-fit flex-1"><h2 class="text-xl font-bold mb-6 text-white border-b border-white/10 pb-4">计划任务</h2><div id="task-list" class="space-y-4 max-h-[400px] overflow-y-auto pr-2"></div></div>
+      <div class="card h-fit flex-1"><h2 class="text-xl font-bold mb-6 text-white border-b border-white/10 pb-4">黑名单</h2><div class="flex gap-3 mb-6"><button class="btn btn-g text-xs py-2 px-4" onclick="ignBatch(true)">全选</button><button class="btn btn-g text-xs py-2 px-4" onclick="ignBatch(false)">全不选</button><button class="btn btn-p text-xs ml-auto font-bold py-2 px-6" onclick="ignRestoreBulk()">♻️ 恢复</button></div><div id="ignore-list" class="space-y-4 max-h-[380px] overflow-y-auto pr-2"></div></div>
+   </div>
+  </div></div>
+ </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+let appConfig={},st={m:'av',ls:new Set(),d:[],p:1,s:new Set(),sid:'',ignS:new Set()},PAGE_SIZE=50,currentTasks=[];
+window.onload=()=>{poll();gl();lc();setInterval(poll,2000);setInterval(ll,3000)};
+function toast(msg){const t=document.createElement('div');t.className='toast';t.innerText=msg;$('toast-box').appendChild(t);setTimeout(()=>{t.remove()},3500)}
+function confirmUI(t,d,i,y){$('conf-title').innerText=t;$('conf-desc').innerText=d;$('conf-icon').innerText=i;$('conf-modal').classList.add('open');$('conf-yes').onclick=()=>{y();closeConf()}}
+function closeConf(){$('conf-modal').classList.remove('open')}
+function nav(p,el){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));$('p-'+p).classList.add('active');if(el){document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));el.classList.add('active')} if(p=='settings'){lc();loadIgnored();loadTasks()}}
+async function poll(){
+ try{const r=await(await fetch('/api/status')).json();
+ $('sb-loc').innerText=r.local_cache;$('sb-cln').innerText=r.cleaned_count;$('sb-spc').innerText=(r.saved_space/1e9).toFixed(2)+" GB";
+ if(r.connected){$('st-name').innerText=r.server_name||"✅ 已连接";$('st-name').className="font-bold text-white text-lg truncate";$('dot').className="dot-main dot-online"}else{$('st-name').innerText="离线";$('dot').className="dot-main"}
+ $('st-ver').innerText=`版本: ${r.server_ver||'--'}`;$('st-user').innerText=`用户: ${r.user_name||'--'}`;st.sid=r.server_id;
+ if(document.activeElement !== $('sync-cron-dash')) $('sync-cron-dash').value=r.sync_cron;
+ const b=$('btn-sync-side');
+ if(r.is_syncing){b.disabled=true;b.innerText="运行中...";$('sync-state-display').innerText=r.sync_lib?`⏳ 索引 [${r.sync_lib}]...`:"⏳ 准备中..."}else{b.disabled=false;b.innerText="🔄 立即同步元数据";$('sync-state-display').innerText="✅ 同步器就绪"}
+}catch(e){}}
+function sync(){confirmUI("全量同步","耗时取决于媒体库大小。","🔄",()=>{fetch('/api/sync',{method:'POST'});toast("✅ 同步指令已下发")})}
+async function gl(){const r=await fetch('/api/libraries');const d=await r.json();const c=await(await fetch('/api/config')).json();
+ $('libs').innerHTML=d.map(l=>`<div class="lib-card" onclick="tl(this,'${l.Id}')"><img src="${l.ImageTags?.Primary?c.host+'/emby/Items/'+l.Id+'/Images/Primary?maxHeight=300':''}"><div class="lib-name">${l.Name}</div></div>`).join('')}
+function tl(e,i){if(st.ls.has(i)){st.ls.delete(i);e.classList.remove('selected')}else{st.ls.add(i);e.classList.add('selected')}}
+function mode(m,e){st.m=m;document.querySelectorAll('.mode-btn').forEach(x=>x.classList.remove('active'));if(e)e.classList.add('active');if(m=='tiny')$('opt-t').classList.remove('hidden');else $('opt-t').classList.add('hidden')}
+async function scan(){$('loader').style.display='flex';let u=`/api/scan?mode=${st.m}&lib=${Array.from(st.ls).join(',')}&param_s=${$('inp-t').value}&param_d=${$('inp-d').value}`;const r=await fetch(u);st.d=await r.json();st.p=1;st.s.clear();rr();rt();nav('results');$('loader').style.display='none'}
+function rt(){
+ let h=`<button class="btn-group-item" onclick="bat('all',true)">全选</button><button class="btn-group-item ml-2" onclick="bat('all',false)">全不选</button>`;
+ if(st.m=='av')h+=`<button class="btn-group-item ml-4" onclick="bat('tag','tag_c')">选 [C]</button><button class="btn-group-item ml-2" onclick="bat('tag','tag_uc')">选 [UC]</button><button class="btn-group-item ml-2" onclick="bat('tag','tag_raw')">选原版</button>`;
+ if(st.m=='smart'){const resos=[...new Set(st.d.flatMap(g=>g.items.map(i=>i.resolution)))].filter(x=>x>0).sort((a,b)=>b-a);resos.forEach(r=>h+=`<button class="btn-group-item ml-2" onclick="bat('reso',${r})">⚡ ${r}P</button>`);}
+ if(st.m=='size')h+=`<button class="btn-group-item ml-4" onclick="bat('len','path_long')">最长径</button><button class="btn-group-item ml-2" onclick="bat('len','path_short')">最短径</button><button class="btn-group-item ml-2" onclick="bat('len','name_long')">最长名</button><button class="btn-group-item ml-2" onclick="bat('len','name_short')">最短名</button>`;
+ if(st.m=='duration')h+=`<button class="btn-group-item ml-4" onclick="bat('filesize','min')">⚡ 选最小文件</button><button class="btn-group-item ml-2" onclick="bat('filesize','max')">⚡ 选最大文件</button>`;
+ $('tb').innerHTML=h}
+function bat(t,a){
+    const f=getFlatSlice();const s=f.slice((st.p-1)*PAGE_SIZE,st.p*PAGE_SIZE);
+    s.forEach(i=>{let m=false;if(t=='all')m=a;if(t=='tag'){if(a=='tag_raw')m=!i.tag_c&&!i.tag_uc&&!i.tag_u;else m=i[a]}if(t=='reso')m=i.resolution==a;
+    if(t=='len'){const g=st.d.find(gx=>gx.items.some(ix=>ix.emby_id===i.emby_id));if(a=='path_long'){const sr=[...g.items].sort((x,y)=>(x.path||'').length-(y.path||'').length);if(i.emby_id===sr[sr.length-1].emby_id)m=true}if(a=='path_short'){const sr=[...g.items].sort((x,y)=>(x.path||'').length-(y.path||'').length);if(i.emby_id===sr[0].emby_id)m=true}if(a=='name_long'){const sr=[...g.items].sort((x,y)=>(x.name||'').length-(y.name||'').length);if(i.emby_id===sr[sr.length-1].emby_id)m=true}if(a=='name_short'){const sr=[...g.items].sort((x,y)=>(x.name||'').length-(y.name||'').length);if(i.emby_id===sr[0].emby_id)m=true}}
+    if(t=='filesize'){const g=st.d.find(gx=>gx.items.some(ix=>ix.emby_id===i.emby_id));const sr=[...g.items].sort((x,y)=>x.size-y.size);if(a=='min'&&i.emby_id===sr[0].emby_id)m=true;if(a=='max'&&i.emby_id===sr[sr.length-1].emby_id)m=true}
+    if(m)st.s.add(i.emby_id);else if(t=='all'&&!a)st.s.delete(i.emby_id);});rr();rt()}
+function getFlatSlice(){let f=[];st.d.forEach(g=>{const ids=g.items.map(x=>x.emby_id).join(',');g.items.forEach(i=>{f.push({...i,groupTitle:g.title,groupItemsIds:ids,groupRaw:g})})});return f}
+function tog(idx){const f=getFlatSlice();const s=f.slice((st.p-1)*PAGE_SIZE,st.p*PAGE_SIZE);const i=s[idx];if(st.s.has(i.emby_id))st.s.delete(i.emby_id);else st.s.add(i.emby_id);rr();rt()}
+function togG(ids,c){ids.split(',').forEach(id=>{if(c)st.s.add(id);else st.s.delete(id)});rr();rt()}
+function pg(dir){const f=getFlatSlice();const t=Math.ceil(f.length/PAGE_SIZE)||1;const n=st.p+dir;if(n>=1&&n<=t){st.p=n;rr();$('content-area').scrollTop=0;}}
+async function rr(){
+ const f=getFlatSlice();const tp=Math.ceil(f.length/PAGE_SIZE)||1;st.p=Math.min(st.p,tp);$('rc').innerText=f.length;$('pcn').innerText=st.p;$('ptn').innerText=tp;
+ const s=f.slice((st.p-1)*PAGE_SIZE,st.p*PAGE_SIZE);
+ if(!s.length){$('rbox').innerHTML='<div class="text-center py-20 text-slate-500 font-bold">✨ 无匹配。</div>';$('act-bar').classList.add('hidden');return}
+ let h='';let lg="";
+ s.forEach((i,idx)=>{
+  const k=st.s.has(i.emby_id);let img=i.has_poster?`<img src="${appConfig.host}/emby/Items/${i.emby_id}/Images/Primary?maxHeight=150" class="w-16 h-24 object-cover mx-4 rounded-lg flex-shrink-0 shadow-md">`:'';
+  let subT="";if(st.m=='size' || st.m=='duration'){let dp=i.path.substring(0,i.path.lastIndexOf('/')+1);let ps=i.groupRaw.items.map(x=>x.path.substring(0,x.path.lastIndexOf('/')+1));let cm="";if(ps.length){let p1=ps[0].split('/');let res=[];for(let j=0;j<p1.length;j++){if(ps.every(px=>px.split('/')[j]===p1[j]))res.push(p1[j]);else break}cm=res.join('/')+'/'}subT=cm?`<span class="path-base">${cm}</span><span class="path-diff">${dp.replace(cm,"")}</span>`:`<span class="path-diff">${dp}</span>`}else{subT=`<span class="path-base">${i.display_path}</span>`}
+  if(i.groupItemsIds!==lg){if(idx!==0)h+=`</div>`;const allC=i.groupRaw.items.every(x=>st.s.has(x.emby_id));h+=`<div class="bg-slate-800/40 rounded-2xl overflow-hidden mb-4 border border-white/5 shadow-xl"><div class="px-5 py-4 border-b border-white/5 bg-white/5 font-bold text-sky-400 flex items-center gap-4"><input type="checkbox" class="w-5 h-5 accent-sky-500 cursor-pointer flex-shrink-0" ${allC?'checked':''} onclick="togG('${i.groupItemsIds}',this.checked)"><span class="text-lg truncate">${i.groupTitle}</span></div>`;lg=i.groupItemsIds}
+  const jI=`<svg onclick="jumpToEmby('${i.emby_id}', event)" class="w-5 h-5 text-sky-400 hover:text-white cursor-pointer ml-auto flex-shrink-0 transition hover:scale-125" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>`;
+  
+  let tags = "";
+  if(i.tag_c) tags += `<span class="ml-2 px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-400 text-[10px] font-bold border border-sky-500/30">C</span>`;
+  if(i.tag_uc) tags += `<span class="ml-2 px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-400 text-[10px] font-bold border border-rose-500/30">UC</span>`;
+  if(i.tag_u) tags += `<span class="ml-2 px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400 text-[10px] font-bold border border-purple-500/30">U</span>`;
+  
+  if(st.m === 'duration') {
+      const sizes = i.groupRaw.items.map(x=>x.size);
+      const minS = Math.min(...sizes); const maxS = Math.max(...sizes);
+      if(sizes.length > 1) {
+          if(i.size === minS) tags += `<span class="ml-2 px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-bold border border-emerald-500/30">最小文件</span>`;
+          if(i.size === maxS) tags += `<span class="ml-2 px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-400 text-[10px] font-bold border border-rose-500/30">最大文件</span>`;
+      }
+  }
+
+  h+=`<div class="res-item ${k?'checked':''}" onclick="tog(${idx})"><div class="w-8 text-center text-xl flex-shrink-0">${k?'✅':'⬜'}</div>${img}<div class="flex-1 px-4 min-w-0"><div class="font-bold truncate text-white text-base flex items-center gap-2">${i.name} ${tags}</div><div class="mt-1 break-all text-[10px] text-slate-400 font-mono leading-tight">${subT}</div><div class='text-[10px] mt-1 text-slate-500 font-mono'><span class="text-sky-300 font-bold mr-1">${(i.size/1e6).toFixed(1)}MB</span> | ${i.duration||0}S</div></div>${jI}</div>`
+ });h+=`</div>`;$('rbox').innerHTML=h;$('dn').innerText=st.s.size;if(st.s.size>0)$('act-bar').classList.remove('hidden');else $('act-bar').classList.add('hidden');
+}
+function jumpToEmby(eid, e) { e.stopPropagation(); if(!appConfig.host){toast("❌ 配置未加载");return} const target=st.sid?`${appConfig.host}/web/index.html#!/item?id=${eid}&serverId=${st.sid}`:`${appConfig.host}/web/index.html#!/item?id=${eid}`; window.open(target, '_blank'); }
+async function del() { confirmUI("物理删除","操作不可逆。","🗑️",async()=>{const ids=Array.from(st.s);if(!ids.length)return;st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0);st.s.clear();rr();rt();$('dn').innerText="0";$('act-bar').classList.add('hidden');toast("⚡ 正在执行删除...");await fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})})}) }
+async function ignoreItems(){
+    const ids=Array.from(st.s);
+    if(!ids.length){toast("❌ 未勾选");return}
+    st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0);
+    st.s.clear();rr();rt();$('act-bar').classList.add('hidden');
+    toast("✅ 已添加忽略");
+    await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});
+}
+async function refreshItems(){const ids=Array.from(st.s);if(!ids.length){toast("❌ 未选中");return}toast("⏳ 指令下发中...");st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size'].includes(st.m)?g.items.length>1:g.items.length>0);st.s.clear();rr();rt();$('act-bar').classList.add('hidden');const r=await fetch('/api/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});const res=await r.json();if(res.status==='ok')toast(`✅ 指令已送达，后台正在热更新...`);else toast("❌ 请求失败")}
+// 🚀 修复：加载黑名单时清空 Set
+async function loadIgnored(){
+    st.ignS.clear(); // Ensure clean state
+    const r=await fetch('/api/ignore');const d=await r.json();
+    $('ignore-list').innerHTML=d.map(i=>`
+        <div class="bg-white/5 p-3 rounded-xl border border-white/5 flex justify-between items-center">
+            <div class="flex items-center gap-3 overflow-hidden">
+                <input type="checkbox" class="ign-check w-4 h-4 accent-sky-500 cursor-pointer flex-shrink-0" value="${i.emby_id}">
+                <div class="truncate pr-2 text-xs text-slate-300" title="${i.name||i.emby_id}">${i.name||i.emby_id}</div>
+            </div>
+            <button class="btn btn-g py-1 px-3 text-[10px] flex-shrink-0" onclick="ignRestoreSingle('${i.emby_id}')">恢复</button>
+        </div>`).join('')
+}
+async function ignRestoreSingle(id){await fetch(`/api/ignore/${id}`,{method:'DELETE'});loadIgnored()}
+// 🚀 修复：批量恢复逻辑
+async function ignRestoreBulk(){
+    const ids=Array.from(st.ignS);if(!ids.length){toast("❌ 未勾选");return}
+    // 并发请求
+    await Promise.all(ids.map(id => fetch(`/api/ignore/${id}`,{method:'DELETE'})));
+    toast("✅ 批量恢复完成");
+    st.ignS.clear();
+    loadIgnored();
+}
+// 🚀 修复：全选逻辑
+function ignBatch(c){
+    const checks = document.querySelectorAll('.ign-check');
+    checks.forEach(x => {
+        x.checked = c;
+        if(c) st.ignS.add(x.value); else st.ignS.delete(x.value);
+    });
+    if(!c) st.ignS.clear();
+}
+// 监听 checkbox 点击
+document.addEventListener('change', function(e){
+    if(e.target.classList.contains('ign-check')){
+        if(e.target.checked) st.ignS.add(e.target.value); else st.ignS.delete(e.target.value);
+    }
+});
+async function loadTasks(){const r=await fetch('/api/tasks');currentTasks=await r.json();const c=await(await fetch('/api/config')).json();let h=c.cron_sync?`<div class='p-3 bg-sky-500/10 rounded-xl border border-sky-500/20 mb-2 flex justify-between items-center'><div class="text-xs text-white">全量更新定时 <span class="text-[10px] text-slate-500 block font-mono">SYSTEM | ${c.cron_sync}</span></div><button class="btn btn-p py-1 px-3 text-[10px]" onclick="$('sync-cron-dash').focus()">⚙️ 修改</button></div>`:'';let list=currentTasks.map(x=>`<div class='p-3 bg-white/5 rounded-xl border border-white/5 flex justify-between items-center mb-2'><div class="text-xs text-white">${x.name} <span class="text-[10px] text-slate-500 block font-mono">${x.mode.toUpperCase()} | ${x.cron}</span></div><div class="flex gap-2"><button class="btn btn-p py-1 px-3 text-[10px]" onclick="editTask(${x.id})">编辑</button><button class="btn btn-d py-1 px-3 text-[10px]" onclick="delTask(${x.id})">删除</button></div></div>`).join('');$('task-list').innerHTML=h+list||'<div class="text-slate-500 text-center py-4 text-[10px]">无任务</div>'}
+async function delTask(id){await fetch(`/api/tasks/${id}`,{method:'DELETE'});loadTasks()}
+function editTask(id){const t=currentTasks.find(x=>x.id===id);if(t){$('m-id').value=t.id;$('m-name').value=t.name;$('m-cron').value=t.cron;$('m-mode').value=t.mode;$('m-libs').value=t.libraries;$('modal').classList.add('open')}}
+function openAddModal(){$('m-id').value='';$('m-name').value='定时任务';$('m-cron').value='0 8 * * *';$('m-mode').value=st.m;$('m-libs').value=Array.from(st.ls).join(',');$('modal').classList.add('open')}
+function closeModal(){$('modal').classList.remove('open')}
+async function submitTask(){const id=$('m-id').value;const b={name:$('m-name').value,cron:$('m-cron').value,mode:$('m-mode').value,libraries:$('m-libs').value,enabled:true};const method=id?'PUT':'POST';const url=id?`/api/tasks/${id}`:'/api/tasks';await fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});closeModal();loadTasks()}
+async function save(){const p={host:$('ch').value,user:$('cu').value,pwd:$('cp').value,webhook:$('cw').value,cron_sync:$('sync-cron-dash').value};await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});toast("✅ 保存成功");lc()}
+async function saveSyncDash(){save();loadTasks()}
+async function lc(){const c=await(await fetch('/api/config')).json();if(c.host&&!c.host.startsWith('http'))c.host='http://'+c.host;if(c.host&&c.host.endsWith('/'))c.host=c.host.slice(0,-1);appConfig=c;$('ch').value=c.host;$('cu').value=c.user;$('cw').value=c.webhook;$('sync-cron-dash').value=c.cron_sync}
+async function testWebhook(){await fetch('/api/test_webhook',{method:'POST'});toast("🔔 Webhook 测试")}
+async function ll(){const r=await(await fetch('/api/logs')).json();$('lbox').innerHTML=r.map(l=>`<div class="log-line border-b border-white/5 py-1 break-all whitespace-pre-wrap">${l}</div>`).join('');$('lbox').scrollTop=$('lbox').scrollHeight}
+async function clearLogs(){await fetch('/api/logs/clear',{method:'POST'});ll()}
+</script></body></html>

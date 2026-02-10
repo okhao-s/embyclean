@@ -1,0 +1,18 @@
+# 忽略数据目录（关键！）
+data/
+emby.db
+emby.db-wal
+emby.db-shm
+
+# 忽略 Python 缓存和日志
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+.DS_Store
+
+# 忽略 Git 和 Docker 配置自身
+.git/
+docker-compose.yml
+.dockerignore

@@ -1,0 +1,10 @@
+services:
+  app:
+    image: okhao/emby_cleaner:latest
+    container_name: embyclean
+    network_mode: host  #port：19898
+    volumes:
+      - /vol1/1000/Docker/embyclean/data:/app/data
+    environment:
+      - TZ=Asia/Shanghai
+    restart: always
