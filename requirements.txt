@@ -1,6 +1,8 @@
 fastapi
 uvicorn
-sqlalchemy
 httpx
+sqlalchemy
+pydantic
 jinja2
+aiofiles
 python-multipart

@@ -2,7 +2,7 @@ import os, re, logging, asyncio, httpx, time
 from datetime import datetime
 from typing import List, Optional
 from fastapi import FastAPI, Request, BackgroundTasks
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, BigInteger, Float, func, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -23,7 +23,8 @@ MODE_MAP = {
 
 # --- 数据模型 ---
 class DeleteRequest(BaseModel): ids: List[str]
-class IgnoreRequest(BaseModel): ids: List[str]
+# 🚀 修改：接收模式参数
+class IgnoreRequest(BaseModel): ids: List[str]; mode: str
 class RefreshRequest(BaseModel): ids: List[str]
 class TaskReq(BaseModel): name: str; mode: str; cron: str; libraries: str; enabled: bool
 class ConfigRequest(BaseModel): host: Optional[str]=""; user: Optional[str]=""; pwd: Optional[str]=""; webhook: Optional[str]=""; cron_sync: Optional[str]=""
@@ -73,8 +74,12 @@ class Config(Base): __tablename__ = "configs"; key = Column(String, primary_key=
 class IgnoredItem(Base): 
     __tablename__ = "ignored_items"
     id = Column(Integer, primary_key=True)
-    emby_id = Column(String, unique=True)
+    # 🚀 修改：去掉 unique=True，允许同一ID在不同模式被忽略
+    emby_id = Column(String) 
     name = Column(String, default="")
+    # 🚀 新增：模式字段
+    mode = Column(String, default="global")
+
 class AuditTask(Base): __tablename__ = "audit_tasks"; id = Column(Integer, primary_key=True); name = Column(String); mode = Column(String); cron = Column(String); libraries = Column(String, default=""); enabled = Column(Boolean, default=True); last_run = Column(String, default="0")
 class MediaItem(Base): 
     __tablename__ = "media_items"
@@ -84,7 +89,7 @@ class MediaItem(Base):
     path = Column(String)
     resolution = Column(Integer)
     size = Column(BigInteger)
-    duration = Column(Float, default=0.0) # 🚀 改为浮点数，存储精确秒数
+    duration = Column(Float, default=0.0)
     has_poster = Column(Boolean)
     library_id = Column(String)
     tag_c = Column(Boolean, default=False)
@@ -98,13 +103,14 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     inspector = inspect(engine)
     with engine.connect() as con:
-        # 自动迁移：确保 duration 是 Float 类型 (SQLite不用改类型，但要确保列存在)
         if "media_items" in inspector.get_table_names():
             cols = [c["name"] for c in inspector.get_columns("media_items")]
             if "duration" not in cols: con.execute(text("ALTER TABLE media_items ADD COLUMN duration FLOAT DEFAULT 0"))
         if "ignored_items" in inspector.get_table_names():
             cols = [c["name"] for c in inspector.get_columns("ignored_items")]
             if "name" not in cols: con.execute(text("ALTER TABLE ignored_items ADD COLUMN name VARCHAR DEFAULT ''"))
+            # 🚀 自动迁移：确保 mode 字段存在
+            if "mode" not in cols: con.execute(text("ALTER TABLE ignored_items ADD COLUMN mode VARCHAR DEFAULT 'global'"))
         con.exec_driver_sql("PRAGMA journal_mode=WAL;")
         con.commit()
 init_db()
@@ -141,7 +147,9 @@ async def send_webhook(db, command, detail, raw=False):
     except: pass
 
 def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0"):
-    ignored = [x.emby_id for x in db.query(IgnoredItem).all()]
+    # 🚀 核心逻辑：只过滤当前模式下的黑名单
+    ignored = [x.emby_id for x in db.query(IgnoredItem).filter(IgnoredItem.mode == mode).all()]
+    
     q = db.query(MediaItem).filter(~MediaItem.emby_id.in_(ignored))
     if lib_str: q = q.filter(MediaItem.library_id.in_(lib_str.split(',')))
     
@@ -157,25 +165,17 @@ def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0"):
         for r in rows: grp.setdefault(r.size, []).append(r)
         return [{"title": f"{k/1e6:.1f} MB", "items": v} for k, v in grp.items()]
     elif mode == "duration":
-        # 🚀 核心优化：按精确时长分组 (保留1位小数)
-        # SQLite 默认存的是 Float，直接 group by duration 可能会因为微小浮点误差导致不匹配
-        # 这里先拉取所有大于0的时长，在 Python 内存中进行高精度分组
         all_items = q.filter(MediaItem.duration > 0.1).all()
         grp = {}
         for item in all_items:
-            # 保留1位小数，例如 12.345 -> 12.3
             key = round(item.duration, 1)
             grp.setdefault(key, []).append(item)
-        
-        # 过滤掉只有1个文件的组
         final_grp = []
         for k, v in grp.items():
             if len(v) > 1:
-                # 排序：按大小
                 v.sort(key=lambda x: x.size)
                 final_grp.append({"title": f"⏱️ {k} 秒", "items": v})
         return final_grp
-
     elif mode == "smart":
         sub = db.query(MediaItem.name).group_by(MediaItem.name).having(func.count(MediaItem.id) > 1)
         rows = q.filter(MediaItem.name.in_(sub)).all(); grp = {}
@@ -214,10 +214,9 @@ async def do_sync(trigger="手动"):
                 for i in items:
                     if i["Id"] in seen_ids: continue
                     seen_ids.add(i["Id"]); path = i.get("Path", ""); w, s = 0, 0
-                    d = 0.0 # 默认为 float
+                    d = 0.0
                     if i.get("MediaSources"):
                         ms = i["MediaSources"][0]; s = ms.get("Size", 0); 
-                        # 🚀 核心：获取精确秒数 (Ticks / 10000000)
                         ticks = ms.get("RunTimeTicks", 0)
                         if ticks: d = float(ticks) / 10000000.0
                         if ms.get("MediaStreams"): w = ms["MediaStreams"][0].get("Width", 0)
@@ -232,7 +231,6 @@ async def do_sync(trigger="手动"):
     except Exception as e: sys_log(f"[SYNC] ❌ 异常: {e}")
     finally: db.close(); sync_lock = False; current_sync_lib = ""
 
-# 🚀 延迟热更新逻辑
 async def delayed_single_update(ids: List[str], host: str, token: str):
     await asyncio.sleep(8)
     db = SessionLocal(); updated = 0
@@ -321,34 +319,42 @@ def scan_api(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0")
     def td(lst): return [{c.name: getattr(x, c.name) for c in x.__table__.columns} | {'display_path': os.path.dirname(x.path) + "/"} for x in lst]
     res = [{"title": f["title"], "items": td(f["items"])} for f in findings]; db.close(); return res
 
+# 🚀 修改：黑名单 API 返回 mode 和 id
 @app.get("/api/ignore")
 def ignore_get():
     db = SessionLocal()
     items = db.query(IgnoredItem).all()
-    res = [{"id": i.id, "emby_id": i.emby_id, "name": i.name if i.name else i.emby_id} for i in items]
+    # 返回主键 id 用于删除
+    res = [{"id": i.id, "emby_id": i.emby_id, "name": i.name if i.name else i.emby_id, "mode": i.mode} for i in items]
     db.close()
     return res
 
+# 🚀 修改：接收 mode 并检查是否重复
 @app.post("/api/ignore")
 async def ignore_post(r: IgnoreRequest):
     db = SessionLocal()
     for eid in r.ids:
-        if not db.query(IgnoredItem).filter(IgnoredItem.emby_id == eid).first(): 
+        # 检查是否已存在于该模式
+        exists = db.query(IgnoredItem).filter(IgnoredItem.emby_id == eid, IgnoredItem.mode == r.mode).first()
+        if not exists: 
             name = ""
             media = db.query(MediaItem).filter(MediaItem.emby_id == eid).first()
             if media: name = media.name
-            db.add(IgnoredItem(emby_id=eid, name=name))
-            sys_log(f"[IGNORE] 🚫 已忽略: {name if name else eid}")
+            db.add(IgnoredItem(emby_id=eid, name=name, mode=r.mode))
+            sys_log(f"[IGNORE] 🚫 已忽略 [{r.mode}]: {name if name else eid}")
     db.commit(); db.close(); return {"status": "ok"}
 
-@app.delete("/api/ignore/{eid}")
-def ignore_del(eid: str):
-    db = SessionLocal(); 
-    item = db.query(IgnoredItem).filter(IgnoredItem.emby_id == eid).first()
-    name = item.name if (item and item.name) else eid
-    db.query(IgnoredItem).filter(IgnoredItem.emby_id == eid).delete()
-    db.commit()
-    sys_log(f"[IGNORE] ♻️ 恢复白名单: {name}") 
+# 🚀 修改：基于 ID 删除
+@app.delete("/api/ignore/{row_id}")
+def ignore_del(row_id: int):
+    db = SessionLocal()
+    item = db.query(IgnoredItem).filter(IgnoredItem.id == row_id).first()
+    if item:
+        name = item.name
+        mode = item.mode
+        db.delete(item)
+        db.commit()
+        sys_log(f"[IGNORE] ♻️ 恢复白名单 [{mode}]: {name}") 
     db.close(); return {"status": "ok"}
 
 async def background_silent_delete(ids, host, token):

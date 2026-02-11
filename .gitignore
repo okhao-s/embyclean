@@ -1,1 +1,13 @@
 data/
+*.db
+*.sqlite
+*.log
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.env.local
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
