@@ -62,4 +62,6 @@ services:
       - "19898:19898"
     volumes:
       - /vol1/1000/Docker/embyclean/data:/app/data
+    environment:
+      - TZ=Asia/Shanghai 
     restart: always
