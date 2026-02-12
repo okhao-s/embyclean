@@ -49,8 +49,11 @@
 
 ## 🐳 部署指南 | Docker Deployment
 
-> 默认端口：`19898`
+### 方式二：Docker Compose
 
+创建 `docker-compose.yml` 文件：
+
+```yaml
 version: '3'
 services:
   embyclean:
