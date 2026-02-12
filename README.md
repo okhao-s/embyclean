@@ -49,7 +49,7 @@
 
 ## 🐳 部署指南 | Docker Deployment
 
-### 方式二：Docker Compose
+### Docker Compose
 
 创建 `docker-compose.yml` 文件：
 
