@@ -54,13 +54,12 @@
 创建 `docker-compose.yml` 文件：
 
 ```yaml
-version: '3'
 services:
-  embyclean:
-    image: okhao/embyclean:latest
+  embycleaner:
     container_name: embyclean
+    image: okhao/emby_cleaner:latest
     ports:
       - "19898:19898"
     volumes:
-      - ./data:/app/data
+      - /vol1/1000/Docker/embyclean/data:/app/data
     restart: always
