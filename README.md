@@ -43,18 +43,8 @@
 
 > 默认端口：`19898`
 
-### 方式一：Docker CLI (推荐)
+### 安装方式：compose
 
-直接复制以下命令运行：
-
-```bash
-docker run -d \
-  --name embyclean \
-  -p 19898:19898 \
-  -v $(pwd)/data:/app/data \
-  --restart always \
-  okhao/embyclean:latest
-方式二：Docker Compose
 version: '3'
 services:
   embyclean:
@@ -65,41 +55,9 @@ services:
     volumes:
       - ./data:/app/data
     restart: always
-⚙️ 初始化配置与使用 | Setup & Usage
-访问后台：服务启动后，访问浏览器 http://你的IP:19898。
 
-系统配置：
 
-点击侧边栏进入 "系统配置" 页面。
-
-填写 Emby 连接信息：
-
-Emby 地址：例如 http://192.168.1.10:8096
-
-用户名：Emby 管理员账号
-
-密码：Emby 管理员密码
-
-点击 "保存配置"。
-
-开始使用：
-
-观察左侧状态栏，当显示 "✅ 已连接" 且小绿点闪烁时，点击侧边栏的 "🔄 立即同步元数据"。
-
-等待同步完成后，即可在 "清理中心" 选择模式开始扫描。
-🔄 更新指南 | Update
-使用以下命令更新到最新版本：
-
-# 1. 拉取最新镜像
-docker pull okhao/embyclean:latest
-
-# 2. 删除旧容器
-docker stop embyclean
-docker rm embyclean
-
-# 3. 重新运行上面的启动命令 (CLI 或 Compose)
-
-⚠️ 免责声明 | Disclaimer
+    ⚠️ 免责声明 | Disclaimer
 本工具涉及 物理文件删除 操作，文件删除后不可恢复。
 
 虽然程序设有黑名单和确认机制，但在执行批量删除前，请务必仔细核对。
