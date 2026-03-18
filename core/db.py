@@ -2,7 +2,7 @@ import os
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, BigInteger, Float, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-DATA_DIR = "data"
+DATA_DIR = os.environ.get("EMBYCLEAN_DATA_DIR", "/app/data")
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = f"sqlite:///{DATA_DIR}/emby.db"
 Base = declarative_base()
