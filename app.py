@@ -107,11 +107,16 @@ def init_db():
         if "media_items" in inspector.get_table_names():
             cols = [c["name"] for c in inspector.get_columns("media_items")]
             if "duration" not in cols: con.execute(text("ALTER TABLE media_items ADD COLUMN duration FLOAT DEFAULT 0"))
+            con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_library_id ON media_items(library_id)"))
+            con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_size ON media_items(size)"))
+            con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_duration ON media_items(duration)"))
+            con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_name ON media_items(name)"))
         if "ignored_items" in inspector.get_table_names():
             cols = [c["name"] for c in inspector.get_columns("ignored_items")]
             if "name" not in cols: con.execute(text("ALTER TABLE ignored_items ADD COLUMN name VARCHAR DEFAULT ''"))
             # 🚀 自动迁移：确保 mode 字段存在
             if "mode" not in cols: con.execute(text("ALTER TABLE ignored_items ADD COLUMN mode VARCHAR DEFAULT 'global'"))
+            con.execute(text("CREATE INDEX IF NOT EXISTS idx_ignored_items_emby_mode ON ignored_items(emby_id, mode)"))
         con.exec_driver_sql("PRAGMA journal_mode=WAL;")
         con.commit()
 init_db()
@@ -127,6 +132,8 @@ RE_UC = re.compile(r'[-_. ]uc$', re.I); RE_U = re.compile(r'[-_. ]u$', re.I); RE
 
 sync_lock = asyncio.Lock(); global_token = ""; current_sync_lib = ""
 DELETE_CONCURRENCY = 8
+STATUS_LOG_INTERVAL = 300
+last_status_log_at = {}
 client = httpx.AsyncClient(timeout=120.0, verify=True)
 insecure_client = httpx.AsyncClient(timeout=120.0, verify=False)
 EMBY_HEADERS = {"X-Emby-Client": "Cleaner", "X-Emby-Device-Name": "Server", "X-Emby-Device-Id": "v1.2-Precision", "X-Emby-Client-Version": "4.9"}
@@ -139,6 +146,13 @@ def emby_client(db):
 
 def emby_headers(token: str):
     return EMBY_HEADERS | {"X-Emby-Token": token}
+
+def log_status_once(key: str, message: str):
+    now = time.time()
+    last = last_status_log_at.get(key, 0)
+    if now - last >= STATUS_LOG_INTERVAL:
+        last_status_log_at[key] = now
+        sys_log(message)
 
 async def get_token(db, force=False):
     global global_token
@@ -157,9 +171,9 @@ async def get_token(db, force=False):
         if r.status_code == 200:
             global_token = r.json().get("AccessToken", "")
             return global_token
-        sys_log(f"[AUTH] ❌ Emby 登录失败: HTTP {r.status_code}")
+        log_status_once("auth_http_error", f"[AUTH] ❌ Emby 登录失败: HTTP {r.status_code}")
     except Exception as e:
-        sys_log(f"[AUTH] ❌ Emby 登录异常: {e}")
+        log_status_once("auth_exception", f"[AUTH] ❌ Emby 登录异常: {e}")
     return ""
 
 async def send_webhook(db, command, detail, raw=False):
@@ -353,7 +367,7 @@ async def st_api():
         try:
             t = await asyncio.wait_for(get_token(db), timeout=6.0)
         except Exception as e:
-            sys_log(f"[STATUS] ⚠️ 获取 token 超时/失败: {e}")
+            log_status_once("status_token_timeout", f"[STATUS] ⚠️ 获取 token 超时/失败: {e}")
             t = ""
     if h and t:
         try:
@@ -364,8 +378,8 @@ async def st_api():
             elif r.status_code in [401, 403]:
                 await get_token(db, force=True)
         except Exception as e:
-            sys_log(f"[STATUS] ⚠️ 获取服务状态失败: {e}")
-    res = {"local_cache": db.query(MediaItem).count(), "cleaned_count": get_conf(db, "cleaned_count") or "0", "saved_space": get_conf(db, "saved_space") or "0", "is_syncing": sync_lock.locked(), "sync_lib": current_sync_lib, "connected": con, "server_name": sn, "server_id": sid, "server_ver": sv, "user_name": get_conf(db, "user"), "sync_cron": get_conf(db, "cron_sync"), "last_log": log_buffer[-1] if log_buffer else "就绪"}
+            log_status_once("status_info_error", f"[STATUS] ⚠️ 获取服务状态失败: {e}")
+    res = {"local_cache": db.query(MediaItem).count(), "cleaned_count": get_conf(db, "cleaned_count") or "0", "saved_space": get_conf(db, "saved_space") or "0", "is_syncing": sync_lock.locked(), "sync_lib": current_sync_lib, "connected": con, "server_name": sn, "server_id": sid, "server_ver": sv, "user_name": get_conf(db, "user"), "sync_cron": get_conf(db, "cron_sync"), "last_log": log_buffer[-1] if log_buffer else "就绪", "status_checked_at": int(time.time())}
     db.close(); return res
 
 @app.post("/api/config")

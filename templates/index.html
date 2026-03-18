@@ -238,7 +238,7 @@ input { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255
 <script>
 const $=id=>document.getElementById(id);
 let appConfig={},st={m:'av',ls:new Set(),d:[],p:1,s:new Set(),sid:'',ignS:new Set(),loaded:0,loading:false},PAGE_SIZE=50,currentTasks=[];
-window.onload=()=>{poll();gl();lc();setInterval(poll,2000);setInterval(ll,3000)};
+window.onload=()=>{poll();gl();lc();setInterval(poll,5000);setInterval(()=>{if($('p-logs').classList.contains('active')) ll()},5000)};
 
 /* 🚀 监听滚动事件：无限加载 */
 $('content-area').addEventListener('scroll', () => {
@@ -251,17 +251,16 @@ $('content-area').addEventListener('scroll', () => {
 function toast(msg){const t=document.createElement('div');t.className='toast';t.innerText=msg;$('toast-box').appendChild(t);setTimeout(()=>{t.remove()},3500)}
 function confirmUI(t,d,i,y){$('conf-title').innerText=t;$('conf-desc').innerText=d;$('conf-icon').innerText=i;$('conf-modal').classList.add('open');$('conf-yes').onclick=()=>{y();closeConf()}}
 function closeConf(){$('conf-modal').classList.remove('open')}
-function nav(p,el){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));$('p-'+p).classList.add('active');if(el){document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));el.classList.add('active')} if(p=='settings'){lc();loadIgnored();loadTasks()}}
+function nav(p,el){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));$('p-'+p).classList.add('active');if(el){document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));el.classList.add('active')} if(p=='settings'){lc();loadIgnored();loadTasks()} if(p=='logs'){ll()}}
 async function poll(){
- try{const r=await(await fetch('/api/status')).json();
+ try{const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),4000);const resp=await fetch('/api/status',{signal:controller.signal});clearTimeout(timer);const r=await resp.json();
  $('sb-loc').innerText=r.local_cache;$('sb-cln').innerText=r.cleaned_count;$('sb-spc').innerText=(r.saved_space/1e9).toFixed(2)+" GB";
- // 小绿点状态逻辑
  if(r.connected){$('st-name').innerText=r.server_name||"✅ 已连接";$('st-name').className="font-bold text-white text-lg truncate";$('dot').className="dot-main dot-online"}else{$('st-name').innerText="离线";$('dot').className="dot-main"}
  $('st-ver').innerText=`版本: ${r.server_ver||'--'}`;$('st-user').innerText=`用户: ${r.user_name||'--'}`;st.sid=r.server_id;
  if(document.activeElement !== $('sync-cron-dash')) $('sync-cron-dash').value=r.sync_cron;
  const b=$('btn-sync-side');
- if(r.is_syncing){b.disabled=true;b.innerText="运行中...";$('sync-state-display').innerText=r.sync_lib?`⏳ 索引 [${r.sync_lib}]...`:"⏳ 准备中..."}else{b.disabled=false;b.innerText="🔄 立即同步元数据";$('sync-state-display').innerText="✅ 同步器就绪"}
-}catch(e){}}
+ if(r.is_syncing){b.disabled=true;b.innerText="运行中...";$('sync-state-display').innerText=r.sync_lib?`⏳ 索引 [${r.sync_lib}]...`:"⏳ 准备中..."}else{b.disabled=false;b.innerText="🔄 立即同步元数据";$('sync-state-display').innerText=r.connected?"✅ 同步器就绪":"⚠️ Emby 离线 / 非本机"}
+ }catch(e){$('st-name').innerText='状态暂不可用';$('dot').className='dot-main';$('sync-state-display').innerText='⚠️ 状态获取失败'}}
 function sync(){confirmUI("全量同步","耗时取决于媒体库大小。","🔄",()=>{fetch('/api/sync',{method:'POST'});toast("✅ 同步指令已下发")})}
 async function gl(){const r=await fetch('/api/libraries');const d=await r.json();const c=await(await fetch('/api/config')).json();
  $('libs').innerHTML=d.map(l=>`<div class="lib-card" onclick="tl(this,'${l.Id}')"><img src="${l.ImageTags?.Primary?c.host+'/emby/Items/'+l.Id+'/Images/Primary?maxHeight=300':''}"><div class="lib-name">${l.Name}</div></div>`).join('')}
