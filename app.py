@@ -5,30 +5,15 @@ from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.responses import HTMLResponse
 from contextlib import suppress
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, BigInteger, Float, func, inspect, text
-from sqlalchemy.orm import declarative_base, sessionmaker
-from pydantic import BaseModel
+from sqlalchemy import func
+from core.db import init_db, SessionLocal, Config, IgnoredItem, AuditTask, MediaItem, get_conf, set_conf
+from core.schemas import DeleteRequest, IgnoreRequest, RefreshRequest, TaskReq, ConfigRequest
+from core.responses import ok, err
+from services.scanner import perform_internal_scan, MODE_MAP, RE_UC, RE_U, RE_C
+from services.scheduler import cron_matches
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
-
-# --- 核心配置 ---
-MODE_MAP = {
-    "av": "番号查重",
-    "smart": "智能洗版",
-    "size": "同大查重",
-    "duration": "时长查重",
-    "noposter": "缺失封面",
-    "tiny": "极小文件"
-}
-
-# --- 数据模型 ---
-class DeleteRequest(BaseModel): ids: List[str]
-# 🚀 修改：接收模式参数
-class IgnoreRequest(BaseModel): ids: List[str]; mode: str
-class RefreshRequest(BaseModel): ids: List[str]
-class TaskReq(BaseModel): name: str; mode: str; cron: str; libraries: str; enabled: bool
-class ConfigRequest(BaseModel): host: Optional[str]=""; user: Optional[str]=""; pwd: Optional[str]=""; webhook: Optional[str]=""; cron_sync: Optional[str]=""
 
 # --- 日志系统 ---
 log_buffer = []
@@ -38,7 +23,8 @@ class MemoryHandler(logging.Handler):
             msg = self.format(record); ts = datetime.now().strftime("%H:%M:%S")
             log_buffer.append(f"[{ts}] {msg}")
             if len(log_buffer) > 20000: log_buffer.pop(0)
-        except Exception as e: sys_log(f"[SCHED] ❌ 调度异常: {e}")
+        except Exception:
+            pass
 
 logger = logging.getLogger("EmbyCleaner")
 logger.setLevel(logging.INFO); logger.addHandler(logging.StreamHandler())
@@ -65,70 +51,6 @@ class WebhookBuffer:
         await send_webhook(db, "清理完成", msg, raw=True)
 
 wb_buffer = WebhookBuffer()
-
-# --- Database ---
-DATA_DIR = "data"; os.makedirs(DATA_DIR, exist_ok=True)
-DB_PATH = f"sqlite:///{DATA_DIR}/emby.db"
-Base = declarative_base()
-
-class Config(Base): __tablename__ = "configs"; key = Column(String, primary_key=True); value = Column(String)
-class IgnoredItem(Base): 
-    __tablename__ = "ignored_items"
-    id = Column(Integer, primary_key=True)
-    # 🚀 修改：去掉 unique=True，允许同一ID在不同模式被忽略
-    emby_id = Column(String) 
-    name = Column(String, default="")
-    # 🚀 新增：模式字段
-    mode = Column(String, default="global")
-
-class AuditTask(Base): __tablename__ = "audit_tasks"; id = Column(Integer, primary_key=True); name = Column(String); mode = Column(String); cron = Column(String); libraries = Column(String, default=""); enabled = Column(Boolean, default=True); last_run = Column(String, default="0")
-class MediaItem(Base): 
-    __tablename__ = "media_items"
-    id = Column(Integer, primary_key=True)
-    emby_id = Column(String, unique=True)
-    name = Column(String)
-    path = Column(String)
-    resolution = Column(Integer)
-    size = Column(BigInteger)
-    duration = Column(Float, default=0.0)
-    has_poster = Column(Boolean)
-    library_id = Column(String)
-    tag_c = Column(Boolean, default=False)
-    tag_uc = Column(Boolean, default=False)
-    tag_u = Column(Boolean, default=False)
-
-engine = create_engine(DB_PATH, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-def init_db():
-    Base.metadata.create_all(bind=engine)
-    inspector = inspect(engine)
-    with engine.connect() as con:
-        if "media_items" in inspector.get_table_names():
-            cols = [c["name"] for c in inspector.get_columns("media_items")]
-            if "duration" not in cols: con.execute(text("ALTER TABLE media_items ADD COLUMN duration FLOAT DEFAULT 0"))
-            con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_library_id ON media_items(library_id)"))
-            con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_size ON media_items(size)"))
-            con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_duration ON media_items(duration)"))
-            con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_name ON media_items(name)"))
-        if "ignored_items" in inspector.get_table_names():
-            cols = [c["name"] for c in inspector.get_columns("ignored_items")]
-            if "name" not in cols: con.execute(text("ALTER TABLE ignored_items ADD COLUMN name VARCHAR DEFAULT ''"))
-            # 🚀 自动迁移：确保 mode 字段存在
-            if "mode" not in cols: con.execute(text("ALTER TABLE ignored_items ADD COLUMN mode VARCHAR DEFAULT 'global'"))
-            con.execute(text("CREATE INDEX IF NOT EXISTS idx_ignored_items_emby_mode ON ignored_items(emby_id, mode)"))
-        con.exec_driver_sql("PRAGMA journal_mode=WAL;")
-        con.commit()
-init_db()
-
-def get_conf(db, k): r = db.query(Config).filter(Config.key == k).first(); return r.value if r else ""
-def set_conf(db, k, v):
-    r = db.query(Config).filter(Config.key == k).first()
-    if r: r.value = str(v)
-    else: db.add(Config(key=k, value=str(v)))
-    db.commit()
-
-RE_UC = re.compile(r'[-_. ]uc$', re.I); RE_U = re.compile(r'[-_. ]u$', re.I); RE_C = re.compile(r'([-_. ]c|[-_. ]ch|chinese|中字|sub|字幕)$', re.I); RE_AV = re.compile(r'([a-zA-Z]{2,5})[-_]?(\d{3,5})')
 
 sync_lock = asyncio.Lock(); global_token = ""; current_sync_lib = ""
 DELETE_CONCURRENCY = 8
@@ -316,24 +238,31 @@ async def delayed_single_update(ids: List[str], host: str, token: str):
 
 async def scheduler_loop():
     while True:
-        await asyncio.sleep(60); db = SessionLocal()
+        await asyncio.sleep(60)
+        db = SessionLocal()
         try:
-            cs = get_conf(db, "cron_sync"); now = datetime.now()
+            now = datetime.now().replace(second=0, microsecond=0)
+            cs = get_conf(db, "cron_sync")
             if cs and (time.time() - float(get_conf(db, "last_sync_ts") or "0")) > 60:
-                p = cs.split()
-                if len(p)>=2 and (p[0]=="*" or int(p[0])==now.minute) and (p[1]=="*" or int(p[1])==now.hour):
-                    set_conf(db, "last_sync_ts", str(time.time())); asyncio.create_task(do_sync("计划"))
+                if cron_matches(cs, now):
+                    set_conf(db, "last_sync_ts", str(time.time()))
+                    asyncio.create_task(do_sync("计划"))
             ts = db.query(AuditTask).filter(AuditTask.enabled == True).all()
             for t in ts:
-                ps = t.cron.split()
-                if len(ps)>=2 and (ps[0]=="*" or int(ps[0])==now.minute) and (ps[1]=="*" or int(ps[1])==now.hour):
-                    if time.time() - float(t.last_run) < 60: continue
-                    t.last_run = str(time.time()); db.commit(); findings = perform_internal_scan(db, t.mode, t.libraries)
-                    if findings:
-                        count = sum(len(f["items"]) for f in findings)
-                        await send_webhook(db, f"定时任务: {t.name}", f"模式: {MODE_MAP.get(t.mode, t.mode)}\n发现: {count} 个待处理项")
-        except: pass
-        finally: db.close()
+                if not cron_matches(t.cron, now):
+                    continue
+                if time.time() - float(t.last_run or "0") < 60:
+                    continue
+                t.last_run = str(time.time())
+                db.commit()
+                findings = perform_internal_scan(db, t.mode, t.libraries)
+                if findings:
+                    count = sum(len(f["items"]) for f in findings)
+                    await send_webhook(db, f"定时任务: {t.name}", f"模式: {MODE_MAP.get(t.mode, t.mode)}\n发现: {count} 个待处理项")
+        except Exception as e:
+            sys_log(f"[SCHED] ❌ 调度异常: {e}")
+        finally:
+            db.close()
 
 scheduler_task = None
 
@@ -389,7 +318,7 @@ def cfg_post(c: ConfigRequest):
     set_conf(db, "webhook_url", c.webhook); set_conf(db, "cron_sync", c.cron_sync)
     if get_conf(db, "ssl_verify") == "":
         set_conf(db, "ssl_verify", "true")
-    db.close(); return {"status": "ok"}
+    db.close(); return ok(status="ok")
 
 @app.get("/api/config")
 def cfg_get():
@@ -404,7 +333,7 @@ def task_post(t: TaskReq):
 def task_put(tid: int, t: TaskReq):
     db = SessionLocal(); x = db.query(AuditTask).filter(AuditTask.id == tid).first()
     if x: x.name, x.mode, x.cron, x.libraries = t.name, t.mode, t.cron, t.libraries; db.commit()
-    db.close(); return {"status": "ok"}
+    db.close(); return ok(status="ok")
 @app.delete("/api/tasks/{id}")
 def task_del(id: int):
     db = SessionLocal(); db.query(AuditTask).filter(AuditTask.id == id).delete(); db.commit(); db.close(); return {"status": "ok"}
@@ -451,7 +380,7 @@ def ignore_del(row_id: int):
         db.delete(item)
         db.commit()
         sys_log(f"[IGNORE] ♻️ 恢复白名单 [{mode}]: {name}") 
-    db.close(); return {"status": "ok"}
+    db.close(); return ok(status="ok")
 
 async def background_silent_delete(ids, host, token):
     db = SessionLocal(); c, s = 0, 0
@@ -490,12 +419,12 @@ async def dele_post(r: DeleteRequest, b: BackgroundTasks):
     db = SessionLocal(); h, t = get_conf(db, "host"), await get_token(db); db.close()
     if not h or not t:
         raise HTTPException(status_code=400, detail="Emby 未配置或认证失败")
-    b.add_task(background_silent_delete, r.ids, h, t); return {"status": "started", "queued": len(r.ids)}
+    b.add_task(background_silent_delete, r.ids, h, t); return ok(status="started", queued=len(r.ids))
 
 @app.get("/api/logs")
 def logs_g(): return log_buffer
 @app.post("/api/logs/clear")
-def logs_c(): global log_buffer; log_buffer.clear(); return {"status": "ok"}
+def logs_c(): global log_buffer; log_buffer.clear(); return ok(status="ok")
 
 @app.get("/", response_class=HTMLResponse)
 async def idx_p(r: Request): return templates.TemplateResponse("index.html", {"request": r})
@@ -513,16 +442,16 @@ async def libs_g():
 @app.post("/api/sync")
 def sync_p(b: BackgroundTasks):
     if sync_lock.locked():
-        return {"status": "already_running"}
+        return ok(status="already_running")
     b.add_task(do_sync)
-    return {"status": "started"}
+    return ok(status="started")
 @app.post("/api/test_webhook")
 async def tw_p():
-    db = SessionLocal(); await send_webhook(db, "测试", "链路正常。"); db.close(); return {"status": "ok"}
+    db = SessionLocal(); await send_webhook(db, "测试", "链路正常。"); db.close(); return ok(status="ok")
 @app.post("/api/refresh")
 async def refresh_p(r: RefreshRequest, b: BackgroundTasks):
     db = SessionLocal(); h, t = get_conf(db, "host"), await get_token(db)
-    if not h or not t: db.close(); return {"status": "error"}
+    if not h or not t: db.close(); return err(status="error", message="Emby 未配置或认证失败")
     sc = 0; fc = 0
     for eid in r.ids:
         try:
