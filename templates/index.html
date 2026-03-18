@@ -232,16 +232,16 @@ input { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border
 
 .theme-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 @media (min-width: 1280px) { .theme-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-.theme-option { border:1px solid var(--border); border-radius: var(--radius-md); padding: 14px; background: var(--panel-3); cursor:pointer; transition:.2s ease; }
-.theme-option:hover { transform: translateY(-2px); box-shadow: var(--card-shadow); }
-.theme-option.active { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft) inset; }
-.theme-preview { height: 72px; border-radius: calc(var(--radius-md) - 4px); margin-bottom: 10px; overflow:hidden; border:1px solid var(--border-soft); }
-.theme-preview.obsidian { background: radial-gradient(circle at top right, #1e293b, #020617); }
-.theme-preview.frost { background: linear-gradient(135deg, #dbeafe, #eff6ff, #ecfeff); }
-.theme-preview.terminal { background: radial-gradient(circle at top, #052e16, #010b05 70%); }
-.theme-preview.paper { background: linear-gradient(180deg, #f8f5ee, #efe7d8); }
-.theme-preview::before { content:''; display:block; height:16px; background: rgba(255,255,255,0.14); }
-.theme-preview::after { content:''; display:block; margin:12px; height:30px; border-radius:12px; background: rgba(255,255,255,0.18); }
+.theme-option { border:1px solid var(--border); border-radius: var(--radius-md); padding: 14px; background: rgba(255,255,255,0.03); cursor:pointer; transition:.2s ease; }
+.theme-option:hover { transform: translateY(-1px); box-shadow: 0 8px 22px -18px rgba(0,0,0,.22); }
+.theme-option.active { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary-soft) inset; }
+.theme-preview { height: 64px; border-radius: calc(var(--radius-md) - 4px); margin-bottom: 10px; overflow:hidden; border:1px solid var(--border-soft); opacity:.92; }
+.theme-preview.obsidian { background: linear-gradient(135deg, #1f2937, #0f172a 65%, #111827); }
+.theme-preview.frost { background: linear-gradient(135deg, #eff6ff, #f8fafc, #eef2ff); }
+.theme-preview.terminal { background: linear-gradient(135deg, #0b1d13, #07150e 65%, #102317); }
+.theme-preview.paper { background: linear-gradient(180deg, #faf7f2, #f2eadc); }
+.theme-preview::before { content:''; display:block; height:14px; background: rgba(255,255,255,0.10); }
+.theme-preview::after { content:''; display:block; margin:12px; height:24px; border-radius:10px; background: rgba(255,255,255,0.12); }
 </style></head><body data-theme="obsidian">
 <div id="loader" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] hidden items-center justify-center"><div class="w-12 h-12 border-4 border-sky-500 border-t-transparent rounded-full animate-spin"></div></div><div id="toast-box"></div>
 
@@ -341,18 +341,18 @@ input { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border
      <div><label class="block text-slate-400 mb-2 font-bold text-xs uppercase tracking-wider">通知 Webhook</label><div class="flex gap-3"><input id="cw" class="flex-1"><button class="btn btn-g px-6" onclick="testWebhook()">Test</button></div></div>
      <button class="btn btn-p w-full py-4 text-lg font-bold mt-4" onclick="save()">💾 保存配置</button>
      <div class="flex items-center gap-4 mt-4 bg-white/5 p-4 rounded-xl border border-white/5"><div class="flex-1"><label class="block text-xs font-bold text-slate-500 mb-1">全量更新定时</label><input id="sync-cron-dash" placeholder="0 4 * * *" class="text-xs p-3"></div><button class="btn btn-g h-full px-6 text-xs" onclick="saveSyncDash()">更新计划</button></div>
+     <div class="mt-4 bg-white/5 p-4 rounded-xl border border-white/5"><label class="block text-xs font-bold text-slate-500 mb-3">界面风格</label>
+        <div class="theme-grid">
+          <div class="theme-option" data-theme-option="obsidian" onclick="setTheme('obsidian')"><div class="theme-preview obsidian"></div><div class="font-bold text-sm">Obsidian Pro</div><div class="text-xs text-slate-400 mt-1">冷峻、深色、稳一点</div></div>
+          <div class="theme-option" data-theme-option="frost" onclick="setTheme('frost')"><div class="theme-preview frost"></div><div class="font-bold text-sm">Frost Glass</div><div class="text-xs text-slate-400 mt-1">轻盈、柔和、玻璃感</div></div>
+          <div class="theme-option" data-theme-option="terminal" onclick="setTheme('terminal')"><div class="theme-preview terminal"></div><div class="font-bold text-sm">Retro Terminal</div><div class="text-xs text-slate-400 mt-1">终端味，但收敛点</div></div>
+          <div class="theme-option" data-theme-option="paper" onclick="setTheme('paper')"><div class="theme-preview paper"></div><div class="font-bold text-sm">Paper Desk</div><div class="text-xs text-slate-400 mt-1">纸感、温和、文档台</div></div>
+        </div>
+     </div>
     </div>
    </div>
    <div class="flex flex-col gap-10 h-full">
       <div class="card h-fit flex-1"><h2 class="text-xl font-bold mb-6 text-white border-b border-white/10 pb-4">计划任务</h2><div id="task-list" class="space-y-4 max-h-[400px] overflow-y-auto pr-2"></div></div>
-      <div class="card h-fit"><h2 class="text-xl font-bold mb-6 text-white border-b border-white/10 pb-4">界面风格</h2>
-        <div class="theme-grid">
-          <div class="theme-option" data-theme-option="obsidian" onclick="setTheme('obsidian')"><div class="theme-preview obsidian"></div><div class="font-bold text-sm">Obsidian Pro</div><div class="text-xs text-slate-400 mt-1">冷峻、深色、现在这挂</div></div>
-          <div class="theme-option" data-theme-option="frost" onclick="setTheme('frost')"><div class="theme-preview frost"></div><div class="font-bold text-sm">Frost Glass</div><div class="text-xs text-slate-400 mt-1">浅色玻璃、轻盈一点</div></div>
-          <div class="theme-option" data-theme-option="terminal" onclick="setTheme('terminal')"><div class="theme-preview terminal"></div><div class="font-bold text-sm">Retro Terminal</div><div class="text-xs text-slate-400 mt-1">黑绿终端、赛博运维味</div></div>
-          <div class="theme-option" data-theme-option="paper" onclick="setTheme('paper')"><div class="theme-preview paper"></div><div class="font-bold text-sm">Paper Desk</div><div class="text-xs text-slate-400 mt-1">纸感卡片、偏文档台</div></div>
-        </div>
-      </div>
       <div class="card h-fit flex-1"><h2 class="text-xl font-bold mb-6 text-white border-b border-white/10 pb-4">黑名单管理</h2><div class="flex gap-3 mb-6"><button class="btn btn-g text-xs py-2 px-4" onclick="ignBatch(true)">全选</button><button class="btn btn-g text-xs py-2 px-4" onclick="ignBatch(false)">全不选</button><button class="btn btn-p text-xs ml-auto font-bold py-2 px-6" onclick="ignRestoreBulk()">♻️ 恢复</button></div><div id="ignore-list" class="space-y-4 max-h-[380px] overflow-y-auto pr-2"></div></div>
    </div>
   </div></div>
