@@ -313,19 +313,30 @@ async def st_api():
 
 @app.post("/api/config")
 def cfg_post(c: ConfigRequest):
-    db = SessionLocal(); set_conf(db, "host", c.host.rstrip('/')); set_conf(db, "user", c.user)
-    if c.pwd: set_conf(db, "pwd", c.pwd)
-    set_conf(db, "webhook_url", c.webhook); set_conf(db, "cron_sync", c.cron_sync)
-    if get_conf(db, "ssl_verify") == "":
-        set_conf(db, "ssl_verify", "true")
-    db.close(); return ok(status="ok")
+    db = SessionLocal()
+    try:
+        set_conf(db, "host", c.host.rstrip('/'))
+        set_conf(db, "user", c.user)
+        if c.pwd:
+            set_conf(db, "pwd", c.pwd)
+        set_conf(db, "webhook_url", c.webhook)
+        set_conf(db, "cron_sync", c.cron_sync)
+        if get_conf(db, "ssl_verify") == "":
+            set_conf(db, "ssl_verify", "true")
+        sys_log(f"[CONFIG] ✅ 配置已保存 host={c.host.rstrip('/')} cron={c.cron_sync}")
+        return ok(status="ok")
+    except Exception as e:
+        sys_log(f"[CONFIG] ❌ 保存失败: {e}")
+        return err(status="error", message=str(e))
+    finally:
+        db.close()
 
 @app.get("/api/config")
 def cfg_get():
     db = SessionLocal(); r = {"host": get_conf(db, "host"), "user": get_conf(db, "user"), "webhook": get_conf(db, "webhook_url"), "cron_sync": get_conf(db, "cron_sync")}; db.close(); return r
 
 @app.get("/api/tasks")
-def tasks_get(): db = SessionLocal(); r = db.query(AuditTask).all(); db.close(); return r
+def tasks_get(): db = SessionLocal(); r = db.query(AuditTask).order_by(AuditTask.id.asc()).all(); db.close(); return r
 @app.post("/api/tasks")
 def task_post(t: TaskReq):
     db = SessionLocal(); db.add(AuditTask(name=t.name, mode=t.mode, cron=t.cron, libraries=t.libraries, enabled=t.enabled)); db.commit(); db.close(); return {"status": "ok"}
@@ -346,10 +357,10 @@ def scan_api(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0")
 
 # 🚀 修改：黑名单 API 返回 mode 和 id
 @app.get("/api/ignore")
-def ignore_get():
+def ignore_get(limit: int = 500, offset: int = 0):
     db = SessionLocal()
-    items = db.query(IgnoredItem).all()
-    # 返回主键 id 用于删除
+    q = db.query(IgnoredItem).order_by(IgnoredItem.id.desc())
+    items = q.offset(max(offset, 0)).limit(min(max(limit, 1), 1000)).all()
     res = [{"id": i.id, "emby_id": i.emby_id, "name": i.name if i.name else i.emby_id, "mode": i.mode} for i in items]
     db.close()
     return res

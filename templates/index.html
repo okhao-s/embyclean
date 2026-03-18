@@ -450,10 +450,25 @@ function editTask(id){const t=currentTasks.find(x=>x.id===id);if(t){$('m-id').va
 function openAddModal(){$('m-id').value='';$('m-name').value='定时任务';$('m-cron').value='0 8 * * *';$('m-mode').value=st.m;$('m-libs').value=Array.from(st.ls).join(',');$('modal').classList.add('open')}
 function closeModal(){$('modal').classList.remove('open')}
 async function submitTask(){const id=$('m-id').value;const b={name:$('m-name').value,cron:$('m-cron').value,mode:$('m-mode').value,libraries:$('m-libs').value,enabled:true};const method=id?'PUT':'POST';const url=id?`/api/tasks/${id}`:'/api/tasks';await fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});closeModal();loadTasks()}
-async function save(){const p={host:$('ch').value,user:$('cu').value,pwd:$('cp').value,webhook:$('cw').value,cron_sync:$('sync-cron-dash').value};await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});toast("✅ 保存成功");lc()}
-async function saveSyncDash(){save();loadTasks()}
+async function save(){
+  try{
+    const payload={host:$('ch').value,user:$('cu').value,pwd:$('cp').value,webhook:$('cw').value,cron_sync:$('sync-cron-dash').value};
+    const resp=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data=await resp.json().catch(()=>({}));
+    if(data.ok===false) throw new Error(data.message||'保存失败');
+    await lc();
+    toast('✅ 保存成功');
+    return true;
+  }catch(e){
+    console.error(e);
+    toast(`❌ 保存失败: ${e.message||e}`);
+    return false;
+  }
+}
+async function saveSyncDash(){const ok=await save(); if(ok) await loadTasks()}
 async function lc(){const c=await(await fetch('/api/config')).json();if(c.host&&!c.host.startsWith('http'))c.host='http://'+c.host;if(c.host&&c.host.endsWith('/'))c.host=c.host.slice(0,-1);appConfig=c;$('ch').value=c.host;$('cu').value=c.user;$('cw').value=c.webhook;$('sync-cron-dash').value=c.cron_sync}
-async function testWebhook(){await fetch('/api/test_webhook',{method:'POST'});toast("🔔 Webhook 测试")}
+async function testWebhook(){try{const resp=await fetch('/api/test_webhook',{method:'POST'}); if(!resp.ok) throw new Error(`HTTP ${resp.status}`); toast('🔔 Webhook 测试已发送')}catch(e){toast(`❌ Webhook 测试失败: ${e.message||e}`)}}
 async function ll(){const r=await(await fetch('/api/logs')).json();$('lbox').innerHTML=r.map(l=>`<div class="log-line border-b border-white/5 py-1 break-all whitespace-pre-wrap">${l}</div>`).join('');$('lbox').scrollTop=$('lbox').scrollHeight}
-async function clearLogs(){await fetch('/api/logs/clear',{method:'POST'});ll()}
+async function clearLogs(){try{const resp=await fetch('/api/logs/clear',{method:'POST'}); if(!resp.ok) throw new Error(`HTTP ${resp.status}`); await ll()}catch(e){toast(`❌ 清空日志失败: ${e.message||e}`)}}
 </script></body></html>
