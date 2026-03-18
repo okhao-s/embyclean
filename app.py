@@ -9,7 +9,7 @@ from sqlalchemy import func
 from core.db import init_db, SessionLocal, Config, IgnoredItem, AuditTask, MediaItem, get_conf, set_conf
 from core.schemas import DeleteRequest, IgnoreRequest, RefreshRequest, TaskReq, ConfigRequest
 from core.responses import ok, err
-from services.scanner import perform_internal_scan, MODE_MAP, RE_UC, RE_U, RE_C
+from services.scanner import perform_internal_scan, MODE_MAP, RE_UC, RE_U, RE_C, RE_AV
 from services.scheduler import cron_matches
 
 app = FastAPI()
