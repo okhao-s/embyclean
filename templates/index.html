@@ -43,42 +43,42 @@ body[data-theme="obsidian"] {
 }
 
 body[data-theme="frost"] {
-  --bg-main: linear-gradient(135deg, #dbeafe 0%, #eff6ff 35%, #ecfeff 100%);
-  --text-main: #1e293b;
-  --text-soft: #64748b;
-  --text-strong: #0f172a;
-  --panel: rgba(255,255,255,0.68);
-  --panel-2: rgba(255,255,255,0.72);
-  --panel-3: rgba(255,255,255,0.58);
-  --border: rgba(148,163,184,0.22);
-  --border-soft: rgba(148,163,184,0.18);
-  --primary: #2563eb;
-  --primary-soft: rgba(37, 99, 235, 0.12);
-  --danger: #e11d48;
-  --success: #059669;
-  --card-shadow: 0 20px 40px -18px rgba(37,99,235,0.18);
-  --radius-lg: 22px;
-  --radius-md: 18px;
-  --radius-sm: 14px;
+  --bg-main: linear-gradient(135deg, #111827 0%, #0f172a 45%, #172554 100%);
+  --text-main: #dbe7f3;
+  --text-soft: #93a9c6;
+  --text-strong: #f8fbff;
+  --panel: rgba(15, 23, 42, 0.82);
+  --panel-2: rgba(9, 16, 32, 0.94);
+  --panel-3: rgba(147, 197, 253, 0.08);
+  --border: rgba(147, 197, 253, 0.18);
+  --border-soft: rgba(147, 197, 253, 0.12);
+  --primary: #60a5fa;
+  --primary-soft: rgba(96, 165, 250, 0.16);
+  --danger: #fb7185;
+  --success: #34d399;
+  --card-shadow: 0 16px 34px -18px rgba(15,23,42,0.55);
+  --radius-lg: 20px;
+  --radius-md: 16px;
+  --radius-sm: 12px;
   --font-main: Inter, 'Segoe UI', system-ui, sans-serif;
-  --backdrop: blur(18px);
+  --backdrop: blur(16px);
 }
 
 body[data-theme="terminal"] {
-  --bg-main: radial-gradient(circle at top, #052e16, #010b05 70%);
-  --text-main: #86efac;
-  --text-soft: #4ade80;
-  --text-strong: #dcfce7;
-  --panel: rgba(3, 10, 6, 0.86);
-  --panel-2: rgba(1, 8, 4, 0.94);
-  --panel-3: rgba(20, 83, 45, 0.18);
-  --border: rgba(74, 222, 128, 0.22);
-  --border-soft: rgba(74, 222, 128, 0.16);
-  --primary: #22c55e;
-  --primary-soft: rgba(34, 197, 94, 0.16);
-  --danger: #ef4444;
-  --success: #22c55e;
-  --card-shadow: 0 0 0 1px rgba(74,222,128,0.08), 0 0 28px rgba(34,197,94,0.08);
+  --bg-main: radial-gradient(circle at top, #05150b, #030b06 70%);
+  --text-main: #a7f3d0;
+  --text-soft: #6ee7b7;
+  --text-strong: #ecfdf5;
+  --panel: rgba(4, 12, 7, 0.88);
+  --panel-2: rgba(2, 8, 5, 0.96);
+  --panel-3: rgba(34, 197, 94, 0.08);
+  --border: rgba(74, 222, 128, 0.18);
+  --border-soft: rgba(74, 222, 128, 0.11);
+  --primary: #4ade80;
+  --primary-soft: rgba(74, 222, 128, 0.14);
+  --danger: #f87171;
+  --success: #4ade80;
+  --card-shadow: 0 0 0 1px rgba(74,222,128,0.06), 0 0 24px rgba(34,197,94,0.06);
   --radius-lg: 8px;
   --radius-md: 6px;
   --radius-sm: 4px;
@@ -87,20 +87,20 @@ body[data-theme="terminal"] {
 }
 
 body[data-theme="paper"] {
-  --bg-main: linear-gradient(180deg, #f8f5ee 0%, #efe7d8 100%);
-  --text-main: #3f3a2f;
-  --text-soft: #7c6f57;
-  --text-strong: #2a241b;
-  --panel: rgba(255, 251, 242, 0.84);
-  --panel-2: rgba(250, 244, 232, 0.9);
-  --panel-3: rgba(255, 250, 240, 0.72);
-  --border: rgba(120, 113, 108, 0.2);
-  --border-soft: rgba(120, 113, 108, 0.12);
-  --primary: #b45309;
-  --primary-soft: rgba(180, 83, 9, 0.12);
-  --danger: #b91c1c;
-  --success: #15803d;
-  --card-shadow: 0 8px 24px -16px rgba(120, 113, 108, 0.35);
+  --bg-main: linear-gradient(180deg, #231f1a 0%, #181410 100%);
+  --text-main: #e7dccb;
+  --text-soft: #b7a78d;
+  --text-strong: #fff8ef;
+  --panel: rgba(41, 33, 24, 0.84);
+  --panel-2: rgba(28, 22, 16, 0.94);
+  --panel-3: rgba(214, 188, 138, 0.08);
+  --border: rgba(214, 188, 138, 0.16);
+  --border-soft: rgba(214, 188, 138, 0.10);
+  --primary: #d6b46b;
+  --primary-soft: rgba(214, 180, 107, 0.14);
+  --danger: #f87171;
+  --success: #4ade80;
+  --card-shadow: 0 10px 28px -16px rgba(0,0,0,0.45);
   --radius-lg: 24px;
   --radius-md: 20px;
   --radius-sm: 16px;
@@ -232,16 +232,25 @@ input { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border
 
 .theme-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 @media (min-width: 1280px) { .theme-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-.theme-option { border:1px solid var(--border); border-radius: var(--radius-md); padding: 14px; background: rgba(255,255,255,0.03); cursor:pointer; transition:.2s ease; }
+.theme-option { border:1px solid var(--border); border-radius: var(--radius-md); padding: 14px; background: rgba(255,255,255,0.04); cursor:pointer; transition:.2s ease; }
 .theme-option:hover { transform: translateY(-1px); box-shadow: 0 8px 22px -18px rgba(0,0,0,.22); }
 .theme-option.active { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary-soft) inset; }
 .theme-preview { height: 64px; border-radius: calc(var(--radius-md) - 4px); margin-bottom: 10px; overflow:hidden; border:1px solid var(--border-soft); opacity:.92; }
 .theme-preview.obsidian { background: linear-gradient(135deg, #1f2937, #0f172a 65%, #111827); }
-.theme-preview.frost { background: linear-gradient(135deg, #eff6ff, #f8fafc, #eef2ff); }
-.theme-preview.terminal { background: linear-gradient(135deg, #0b1d13, #07150e 65%, #102317); }
-.theme-preview.paper { background: linear-gradient(180deg, #faf7f2, #f2eadc); }
+.theme-preview.frost { background: linear-gradient(135deg, #1e293b, #172554, #1d4ed8); }
+.theme-preview.terminal { background: linear-gradient(135deg, #0b1d13, #07150e 65%, #123524); }
+.theme-preview.paper { background: linear-gradient(180deg, #3a3128, #241d17); }
 .theme-preview::before { content:''; display:block; height:14px; background: rgba(255,255,255,0.10); }
 .theme-preview::after { content:''; display:block; margin:12px; height:24px; border-radius:10px; background: rgba(255,255,255,0.12); }
+
+.sidebar, .card, .metric-card, .res-item, .task-item, .modal-box, input, select, button.btn-g { transition: background .2s ease, border-color .2s ease, color .2s ease, box-shadow .2s ease; }
+input, select { background: color-mix(in srgb, var(--panel-2) 76%, #000 24%) !important; border: 1px solid var(--border) !important; color: var(--text-strong) !important; }
+input::placeholder { color: var(--text-soft) !important; opacity: .78; }
+.card, .metric-card, .res-item, .task-item { border-color: var(--border) !important; }
+.text-slate-400, .text-slate-500 { color: var(--text-soft) !important; }
+.text-white { color: var(--text-strong) !important; }
+.bg-white\/5 { background: var(--panel-3) !important; }
+.border-white\/5, .border-white\/10 { border-color: var(--border-soft) !important; }
 </style></head><body data-theme="obsidian">
 <div id="loader" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] hidden items-center justify-center"><div class="w-12 h-12 border-4 border-sky-500 border-t-transparent rounded-full animate-spin"></div></div><div id="toast-box"></div>
 
