@@ -2,11 +2,16 @@ services:
   embycleaner:
     container_name: embyclean
     build: .
-    image: okhao/emby_cleaner:latest
     ports:
       - "19898:19898"
     volumes:
-      - /vol1/1000/Docker/embyclean/templates:/app/templates
-      - /vol1/1000/Docker/embyclean/app.py:/app/app.py
-      - /vol1/1000/Docker/embyclean/data:/app/data
+      - /root/docker/embyclean/embyclean/data:/app/data
+    environment:
+      - TZ=Asia/Shanghai
     restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:19898/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

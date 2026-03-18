@@ -1,8 +1,9 @@
 import os, re, logging, asyncio, httpx, time
 from datetime import datetime
 from typing import List, Optional
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.responses import HTMLResponse
+from contextlib import suppress
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, BigInteger, Float, func, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -37,7 +38,7 @@ class MemoryHandler(logging.Handler):
             msg = self.format(record); ts = datetime.now().strftime("%H:%M:%S")
             log_buffer.append(f"[{ts}] {msg}")
             if len(log_buffer) > 20000: log_buffer.pop(0)
-        except: pass
+        except Exception as e: sys_log(f"[SCHED] ❌ 调度异常: {e}")
 
 logger = logging.getLogger("EmbyCleaner")
 logger.setLevel(logging.INFO); logger.addHandler(logging.StreamHandler())
@@ -124,19 +125,41 @@ def set_conf(db, k, v):
 
 RE_UC = re.compile(r'[-_. ]uc$', re.I); RE_U = re.compile(r'[-_. ]u$', re.I); RE_C = re.compile(r'([-_. ]c|[-_. ]ch|chinese|中字|sub|字幕)$', re.I); RE_AV = re.compile(r'([a-zA-Z]{2,5})[-_]?(\d{3,5})')
 
-sync_lock = False; global_token = ""; current_sync_lib = ""
-client = httpx.AsyncClient(timeout=120.0, verify=False)
+sync_lock = asyncio.Lock(); global_token = ""; current_sync_lib = ""
+DELETE_CONCURRENCY = 8
+client = httpx.AsyncClient(timeout=120.0, verify=True)
+insecure_client = httpx.AsyncClient(timeout=120.0, verify=False)
 EMBY_HEADERS = {"X-Emby-Client": "Cleaner", "X-Emby-Device-Name": "Server", "X-Emby-Device-Id": "v1.2-Precision", "X-Emby-Client-Version": "4.9"}
+
+def ssl_verify_enabled(db):
+    return str(get_conf(db, "ssl_verify") or "true").strip().lower() not in {"0", "false", "no", "off"}
+
+def emby_client(db):
+    return client if ssl_verify_enabled(db) else insecure_client
+
+def emby_headers(token: str):
+    return EMBY_HEADERS | {"X-Emby-Token": token}
 
 async def get_token(db, force=False):
     global global_token
-    if global_token and not force: return global_token
+    if global_token and not force:
+        return global_token
     h, u, p = get_conf(db, "host"), get_conf(db, "user"), get_conf(db, "pwd")
-    if not h or not u: return ""
+    if not h or not u:
+        return ""
     try:
-        r = await client.post(f"{h.rstrip('/')}/Users/AuthenticateByName", json={"Username": u, "Pw": p}, headers=EMBY_HEADERS)
-        if r.status_code == 200: global_token = r.json().get("AccessToken"); return global_token
-    except: pass
+        r = await emby_client(db).post(
+            f"{h.rstrip('/')}/Users/AuthenticateByName",
+            json={"Username": u, "Pw": p},
+            headers=EMBY_HEADERS,
+            timeout=10.0,
+        )
+        if r.status_code == 200:
+            global_token = r.json().get("AccessToken", "")
+            return global_token
+        sys_log(f"[AUTH] ❌ Emby 登录失败: HTTP {r.status_code}")
+    except Exception as e:
+        sys_log(f"[AUTH] ❌ Emby 登录异常: {e}")
     return ""
 
 async def send_webhook(db, command, detail, raw=False):
@@ -193,43 +216,65 @@ def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0"):
     return []
 
 async def do_sync(trigger="手动"):
-    global sync_lock, current_sync_lib; sync_lock = True; current_sync_lib = "初始化..."; sys_log(f"[SYNC] >>> {trigger}同步启动..."); db = SessionLocal()
-    try:
-        h, t = get_conf(db, "host"), await get_token(db)
-        if not t: sys_log("[SYNC] ❌ 授权失败"); return
-        res = await client.get(f"{h}/Library/MediaFolders", headers=EMBY_HEADERS | {"X-Emby-Token": t})
-        libs = res.json().get("Items", [])
-        db.query(MediaItem).delete(); db.commit()
-        tot = 0; seen_ids = set()
-        for l in libs:
-            lib_id = l['Id']; lib_name = l.get('Name', 'Unknown'); current_sync_lib = lib_name; start_index = 0
-            while True:
-                params = {"ParentId": lib_id, "Recursive": "true", "IncludeItemTypes": "Movie,Video,Series", "Fields": "Path,MediaSources,ImageTags", "StartIndex": start_index, "Limit": 1000}
-                try:
-                    res_items = await client.get(f"{h}/emby/Items", params=params, headers=EMBY_HEADERS | {"X-Emby-Token": t})
-                    data = res_items.json(); items = data.get("Items", []); total_count = data.get("TotalRecordCount", 0)
-                except: break
-                if not items: break
-                buf = []
-                for i in items:
-                    if i["Id"] in seen_ids: continue
-                    seen_ids.add(i["Id"]); path = i.get("Path", ""); w, s = 0, 0
-                    d = 0.0
-                    if i.get("MediaSources"):
-                        ms = i["MediaSources"][0]; s = ms.get("Size", 0); 
-                        ticks = ms.get("RunTimeTicks", 0)
-                        if ticks: d = float(ticks) / 10000000.0
-                        if ms.get("MediaStreams"): w = ms["MediaStreams"][0].get("Width", 0)
-                    base = os.path.splitext(os.path.basename(path))[0]
-                    uc = bool(RE_UC.search(base or i['Name'])); u = False if uc else bool(RE_U.search(base or i['Name'])); c = False if (uc or u) else bool(RE_C.search(base or i['Name']))
-                    buf.append(MediaItem(emby_id=i["Id"], name=i.get("Name", ""), path=path, resolution=w, size=s, duration=d, has_poster="Primary" in i.get("ImageTags", {}), library_id=lib_id, tag_c=c, tag_uc=uc, tag_u=u))
-                if buf: db.bulk_save_objects(buf); db.commit(); tot += len(buf)
-                sys_log(f"[SYNC] ⏳ 索引 [{lib_name}]: {min(start_index + len(items), total_count)} / {total_count}")
-                start_index += len(items)
-                if start_index >= total_count: break
-        sys_log(f"[SYNC] ✅ 同步完成 (共 {tot} 条)"); await send_webhook(db, "全量同步", f"入库 {tot} 条。")
-    except Exception as e: sys_log(f"[SYNC] ❌ 异常: {e}")
-    finally: db.close(); sync_lock = False; current_sync_lib = ""
+    global current_sync_lib
+    if sync_lock.locked():
+        sys_log(f"[SYNC] ⚠️ 已有同步进行中，忽略本次 {trigger} 请求")
+        return False
+    async with sync_lock:
+        current_sync_lib = "初始化..."
+        sys_log(f"[SYNC] >>> {trigger}同步启动...")
+        db = SessionLocal()
+        try:
+            h, t = get_conf(db, "host"), await get_token(db)
+            if not t:
+                sys_log("[SYNC] ❌ 授权失败")
+                return False
+            res = await emby_client(db).get(f"{h}/Library/MediaFolders", headers=emby_headers(t))
+            libs = res.json().get("Items", [])
+            db.query(MediaItem).delete(); db.commit()
+            tot = 0; seen_ids = set()
+            for l in libs:
+                lib_id = l['Id']; lib_name = l.get('Name', 'Unknown'); current_sync_lib = lib_name; start_index = 0
+                while True:
+                    params = {"ParentId": lib_id, "Recursive": "true", "IncludeItemTypes": "Movie,Video,Series", "Fields": "Path,MediaSources,ImageTags", "StartIndex": start_index, "Limit": 1000}
+                    try:
+                        res_items = await emby_client(db).get(f"{h}/emby/Items", params=params, headers=emby_headers(t))
+                        data = res_items.json(); items = data.get("Items", []); total_count = data.get("TotalRecordCount", 0)
+                    except Exception as e:
+                        sys_log(f"[SYNC] ❌ 拉取媒体项失败 [{lib_name}] start={start_index}: {e}")
+                        break
+                    if not items:
+                        break
+                    buf = []
+                    for i in items:
+                        if i["Id"] in seen_ids:
+                            continue
+                        seen_ids.add(i["Id"]); path = i.get("Path", ""); w, s = 0, 0
+                        d = 0.0
+                        if i.get("MediaSources"):
+                            ms = i["MediaSources"][0]; s = ms.get("Size", 0)
+                            ticks = ms.get("RunTimeTicks", 0)
+                            if ticks:
+                                d = float(ticks) / 10000000.0
+                            if ms.get("MediaStreams"):
+                                w = ms["MediaStreams"][0].get("Width", 0)
+                        base = os.path.splitext(os.path.basename(path))[0]
+                        uc = bool(RE_UC.search(base or i['Name'])); u = False if uc else bool(RE_U.search(base or i['Name'])); c = False if (uc or u) else bool(RE_C.search(base or i['Name']))
+                        buf.append(MediaItem(emby_id=i["Id"], name=i.get("Name", ""), path=path, resolution=w, size=s, duration=d, has_poster="Primary" in i.get("ImageTags", {}), library_id=lib_id, tag_c=c, tag_uc=uc, tag_u=u))
+                    if buf:
+                        db.bulk_save_objects(buf); db.commit(); tot += len(buf)
+                    sys_log(f"[SYNC] ⏳ 索引 [{lib_name}]: {min(start_index + len(items), total_count)} / {total_count}")
+                    start_index += len(items)
+                    if start_index >= total_count:
+                        break
+            sys_log(f"[SYNC] ✅ 同步完成 (共 {tot} 条)")
+            await send_webhook(db, "全量同步", f"入库 {tot} 条。")
+            return True
+        except Exception as e:
+            sys_log(f"[SYNC] ❌ 异常: {e}")
+            return False
+        finally:
+            db.close(); current_sync_lib = ""
 
 async def delayed_single_update(ids: List[str], host: str, token: str):
     await asyncio.sleep(8)
@@ -237,19 +282,23 @@ async def delayed_single_update(ids: List[str], host: str, token: str):
     try:
         for eid in ids:
             try:
-                res = await client.get(f"{host.rstrip('/')}/emby/Items", params={"Ids": eid, "Fields": "MediaSources,ImageTags"}, headers=EMBY_HEADERS | {"X-Emby-Token": token})
+                res = await emby_client(db).get(f"{host.rstrip('/')}/emby/Items", params={"Ids": eid, "Fields": "MediaSources,ImageTags"}, headers=emby_headers(token))
                 if res.status_code == 200:
                     items = res.json().get("Items", [])
                     if items:
                         item_data = items[0]; local_item = db.query(MediaItem).filter(MediaItem.emby_id == eid).first()
                         if local_item:
                             local_item.has_poster = "Primary" in item_data.get("ImageTags", {})
-                            if item_data.get("MediaSources"): local_item.size = item_data["MediaSources"][0].get("Size", 0)
+                            if item_data.get("MediaSources"):
+                                local_item.size = item_data["MediaSources"][0].get("Size", 0)
                             updated += 1
-            except: pass
+            except Exception as e:
+                sys_log(f"[UPDATE] ❌ 热更新失败 [{eid}]: {e}")
         db.commit()
-        if updated > 0: sys_log(f"[UPDATE] 🔥 热更新完成: 校准 {updated} 个项目")
-    finally: db.close()
+        if updated > 0:
+            sys_log(f"[UPDATE] 🔥 热更新完成: 校准 {updated} 个项目")
+    finally:
+        db.close()
 
 async def scheduler_loop():
     while True:
@@ -272,28 +321,61 @@ async def scheduler_loop():
         except: pass
         finally: db.close()
 
+scheduler_task = None
+
 @app.on_event("startup")
-async def startup_event(): sys_log("[SYSTEM] 🚀 服务就绪..."); asyncio.create_task(scheduler_loop())
+async def startup_event():
+    global scheduler_task
+    sys_log("[SYSTEM] 🚀 服务就绪...")
+    scheduler_task = asyncio.create_task(scheduler_loop())
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global scheduler_task
+    if scheduler_task:
+        scheduler_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await scheduler_task
+    await client.aclose()
+    await insecure_client.aclose()
+
+@app.get("/api/health")
+def health_api():
+    return {"status": "ok", "sync_running": sync_lock.locked()}
 
 @app.get("/api/status")
 async def st_api():
-    db = SessionLocal(); sn, sv, sid, con = "离线", "", "", False; h, t = get_conf(db, "host"), await get_token(db)
+    db = SessionLocal()
+    sn, sv, sid, con = "离线", "", "", False
+    h = get_conf(db, "host")
+    t = ""
+    if h:
+        try:
+            t = await asyncio.wait_for(get_token(db), timeout=6.0)
+        except Exception as e:
+            sys_log(f"[STATUS] ⚠️ 获取 token 超时/失败: {e}")
+            t = ""
     if h and t:
         try:
-            r = await client.get(f"{h.rstrip('/')}/System/Info", headers=EMBY_HEADERS | {"X-Emby-Token": t}, timeout=10.0)
+            r = await emby_client(db).get(f"{h.rstrip('/')}/System/Info", headers=emby_headers(t), timeout=5.0)
             if r.status_code == 200:
                 info = r.json(); sid = info.get("Id") or info.get("id") or info.get("ServerId") or ""
                 sn, sv, con = info.get("ServerName"), info.get("Version"), True
-            elif r.status_code in [401, 403]: await get_token(db, force=True)
-        except: pass
-    res = {"local_cache": db.query(MediaItem).count(), "cleaned_count": get_conf(db, "cleaned_count") or "0", "saved_space": get_conf(db, "saved_space") or "0", "is_syncing": sync_lock, "sync_lib": current_sync_lib, "connected": con, "server_name": sn, "server_id": sid, "server_ver": sv, "user_name": get_conf(db, "user"), "sync_cron": get_conf(db, "cron_sync"), "last_log": log_buffer[-1] if log_buffer else "就绪"}
+            elif r.status_code in [401, 403]:
+                await get_token(db, force=True)
+        except Exception as e:
+            sys_log(f"[STATUS] ⚠️ 获取服务状态失败: {e}")
+    res = {"local_cache": db.query(MediaItem).count(), "cleaned_count": get_conf(db, "cleaned_count") or "0", "saved_space": get_conf(db, "saved_space") or "0", "is_syncing": sync_lock.locked(), "sync_lib": current_sync_lib, "connected": con, "server_name": sn, "server_id": sid, "server_ver": sv, "user_name": get_conf(db, "user"), "sync_cron": get_conf(db, "cron_sync"), "last_log": log_buffer[-1] if log_buffer else "就绪"}
     db.close(); return res
 
 @app.post("/api/config")
 def cfg_post(c: ConfigRequest):
     db = SessionLocal(); set_conf(db, "host", c.host.rstrip('/')); set_conf(db, "user", c.user)
     if c.pwd: set_conf(db, "pwd", c.pwd)
-    set_conf(db, "webhook_url", c.webhook); set_conf(db, "cron_sync", c.cron_sync); db.close(); return {"status": "ok"}
+    set_conf(db, "webhook_url", c.webhook); set_conf(db, "cron_sync", c.cron_sync)
+    if get_conf(db, "ssl_verify") == "":
+        set_conf(db, "ssl_verify", "true")
+    db.close(); return {"status": "ok"}
 
 @app.get("/api/config")
 def cfg_get():
@@ -359,22 +441,42 @@ def ignore_del(row_id: int):
 
 async def background_silent_delete(ids, host, token):
     db = SessionLocal(); c, s = 0, 0
+    sem = asyncio.Semaphore(DELETE_CONCURRENCY)
+    failed = []
+
     async def fast_del(eid):
-        try:
-            r = await client.delete(f"{host}/Items/{eid}", headers=EMBY_HEADERS | {"X-Emby-Token": token})
-            return eid if r.status_code in [200, 204] else None
-        except: return None
-    results = await asyncio.gather(*[fast_del(x) for x in ids])
-    for eid in [x for x in results if x]:
-        i = db.query(MediaItem).filter(MediaItem.emby_id == eid).first()
-        if i: c += 1; s += i.size; db.delete(i); await wb_buffer.add(i.size, db)
-    db.commit(); set_conf(db, "cleaned_count", str(int(get_conf(db, "cleaned_count") or 0) + c)); set_conf(db, "saved_space", str(int(get_conf(db, "saved_space") or 0) + s))
-    db.close()
+        async with sem:
+            try:
+                r = await emby_client(db).delete(f"{host.rstrip('/')}/Items/{eid}", headers=emby_headers(token))
+                if r.status_code in [200, 204]:
+                    return eid
+                failed.append((eid, f"HTTP {r.status_code}"))
+                return None
+            except Exception as e:
+                failed.append((eid, str(e)))
+                return None
+
+    try:
+        results = await asyncio.gather(*[fast_del(x) for x in ids])
+        for eid in [x for x in results if x]:
+            i = db.query(MediaItem).filter(MediaItem.emby_id == eid).first()
+            if i:
+                c += 1; s += i.size; db.delete(i); await wb_buffer.add(i.size, db)
+        db.commit(); set_conf(db, "cleaned_count", str(int(get_conf(db, "cleaned_count") or 0) + c)); set_conf(db, "saved_space", str(int(get_conf(db, "saved_space") or 0) + s))
+        if failed:
+            preview = ', '.join([f"{eid}:{reason}" for eid, reason in failed[:5]])
+            sys_log(f"[DELETE] ⚠️ 删除完成，成功 {c} 个，失败 {len(failed)} 个 -> {preview}")
+        else:
+            sys_log(f"[DELETE] ✅ 删除完成，成功 {c} 个")
+    finally:
+        db.close()
 
 @app.post("/api/delete")
 async def dele_post(r: DeleteRequest, b: BackgroundTasks):
     db = SessionLocal(); h, t = get_conf(db, "host"), await get_token(db); db.close()
-    b.add_task(background_silent_delete, r.ids, h, t); return {"status": "started"}
+    if not h or not t:
+        raise HTTPException(status_code=400, detail="Emby 未配置或认证失败")
+    b.add_task(background_silent_delete, r.ids, h, t); return {"status": "started", "queued": len(r.ids)}
 
 @app.get("/api/logs")
 def logs_g(): return log_buffer
@@ -385,11 +487,21 @@ def logs_c(): global log_buffer; log_buffer.clear(); return {"status": "ok"}
 async def idx_p(r: Request): return templates.TemplateResponse("index.html", {"request": r})
 @app.get("/api/libraries")
 async def libs_g():
-    db = SessionLocal(); h, t = get_conf(db, "host"), await get_token(db); db.close()
-    try: r = await client.get(f"{h}/Library/MediaFolders", headers=EMBY_HEADERS | {"X-Emby-Token": t}); return r.json().get("Items", [])
-    except: return []
+    db = SessionLocal(); h, t = get_conf(db, "host"), await get_token(db)
+    try:
+        r = await emby_client(db).get(f"{h}/Library/MediaFolders", headers=emby_headers(t))
+        return r.json().get("Items", [])
+    except Exception as e:
+        sys_log(f"[LIBS] ❌ 获取媒体库失败: {e}")
+        return []
+    finally:
+        db.close()
 @app.post("/api/sync")
-def sync_p(b: BackgroundTasks): b.add_task(do_sync); return {"status": "started"}
+def sync_p(b: BackgroundTasks):
+    if sync_lock.locked():
+        return {"status": "already_running"}
+    b.add_task(do_sync)
+    return {"status": "started"}
 @app.post("/api/test_webhook")
 async def tw_p():
     db = SessionLocal(); await send_webhook(db, "测试", "链路正常。"); db.close(); return {"status": "ok"}
@@ -401,7 +513,7 @@ async def refresh_p(r: RefreshRequest, b: BackgroundTasks):
     for eid in r.ids:
         try:
             u = f"{h.rstrip('/')}/Items/{eid}/Refresh?Recursive=true&ImageRefreshMode=FullRefresh&MetadataRefreshMode=FullRefresh&ReplaceAllImages=true&ReplaceAllMetadata=true"
-            resp = await client.post(u, headers=EMBY_HEADERS | {"X-Emby-Token": t})
+            resp = await emby_client(db).post(u, headers=emby_headers(t))
             if resp.status_code in [200, 204]: sc += 1
             else: fc += 1
         except: fc += 1
