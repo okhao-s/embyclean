@@ -14,6 +14,7 @@ from services.scanner import MODE_MAP
 from services.scheduler import cron_matches
 
 app = FastAPI()
+init_db()
 templates = Jinja2Templates(directory="templates")
 
 # --- 日志系统 ---
@@ -210,12 +211,22 @@ async def scheduler_loop():
                     continue
                 if time.time() - float(t.last_run or "0") < 60:
                     continue
-                t.last_run = str(time.time())
+                started_at = time.time()
+                t.last_run = str(started_at)
                 db.commit()
                 findings = scanner_service.perform_internal_scan(db, t.mode, t.libraries)
+                count = sum(len(f["items"]) for f in findings) if findings else 0
+                t.last_found = count
+                t.last_duration_ms = int((time.time() - started_at) * 1000)
                 if findings:
-                    count = sum(len(f["items"]) for f in findings)
-                    await send_webhook(db, f"定时任务: {t.name}", f"模式: {MODE_MAP.get(t.mode, t.mode)}\n发现: {count} 个待处理项")
+                    t.last_status = "matched"
+                    t.last_message = f"发现 {count} 个待处理项"
+                    db.commit()
+                    await send_webhook(db, f"定时任务: {t.name}", f"模式: {MODE_MAP.get(t.mode, t.mode)}\n发现: {count} 个待处理项\n耗时: {t.last_duration_ms}ms")
+                else:
+                    t.last_status = "clean"
+                    t.last_message = "未发现待处理项"
+                    db.commit()
         except Exception as e:
             sys_log(f"[SCHED] ❌ 调度异常: {e}")
         finally:
@@ -278,6 +289,13 @@ def cfg_post(c: ConfigRequest):
             set_conf(db, "pwd", c.pwd)
         set_conf(db, "webhook_url", c.webhook)
         set_conf(db, "cron_sync", c.cron_sync)
+        prefs = getattr(c, 'prefs', None) or {}
+        if prefs:
+            set_conf(db, "pref.av.keep_priority", prefs.get("av_keep_priority", "uc,c,raw"))
+            set_conf(db, "pref.size.keep", prefs.get("size_keep", "max"))
+            set_conf(db, "pref.duration.keep", prefs.get("duration_keep", "best"))
+            set_conf(db, "pref.smart.keep", prefs.get("smart_keep", "best"))
+            set_conf(db, "pref.batch.confirm", prefs.get("confirm_batch", "true"))
         if get_conf(db, "ssl_verify") == "":
             set_conf(db, "ssl_verify", "true")
         sys_log(f"[CONFIG] ✅ 配置已保存 host={c.host.rstrip('/')} cron={c.cron_sync}")
@@ -290,7 +308,21 @@ def cfg_post(c: ConfigRequest):
 
 @app.get("/api/config")
 def cfg_get():
-    db = SessionLocal(); r = {"host": get_conf(db, "host"), "user": get_conf(db, "user"), "webhook": get_conf(db, "webhook_url"), "cron_sync": get_conf(db, "cron_sync")}; db.close(); return r
+    db = SessionLocal()
+    r = {
+        "host": get_conf(db, "host"),
+        "user": get_conf(db, "user"),
+        "webhook": get_conf(db, "webhook_url"),
+        "cron_sync": get_conf(db, "cron_sync"),
+        "prefs": {
+            "av_keep_priority": get_conf(db, "pref.av.keep_priority") or "uc,c,raw",
+            "size_keep": get_conf(db, "pref.size.keep") or "max",
+            "duration_keep": get_conf(db, "pref.duration.keep") or "best",
+            "smart_keep": get_conf(db, "pref.smart.keep") or "best",
+            "confirm_batch": get_conf(db, "pref.batch.confirm") or "true",
+        }
+    }
+    db.close(); return r
 
 @app.get("/api/tasks")
 def tasks_get(): db = SessionLocal(); r = db.query(AuditTask).order_by(AuditTask.id.asc()).all(); db.close(); return r
@@ -306,11 +338,71 @@ def task_put(tid: int, t: TaskReq):
 def task_del(id: int):
     db = SessionLocal(); db.query(AuditTask).filter(AuditTask.id == id).delete(); db.commit(); db.close(); return {"status": "ok"}
 
+@app.post("/api/tasks/{id}/run")
+async def task_run_now(id: int):
+    db = SessionLocal()
+    try:
+        t = db.query(AuditTask).filter(AuditTask.id == id).first()
+        if not t:
+            return err(status="error", message="任务不存在")
+        started_at = time.time()
+        t.last_run = str(started_at)
+        db.commit()
+        findings = scanner_service.perform_internal_scan(db, t.mode, t.libraries)
+        count = sum(len(f["items"]) for f in findings) if findings else 0
+        t.last_found = count
+        t.last_duration_ms = int((time.time() - started_at) * 1000)
+        if findings:
+            t.last_status = "matched"
+            t.last_message = f"发现 {count} 个待处理项"
+            db.commit()
+            await send_webhook(db, f"手动任务: {t.name}", f"模式: {MODE_MAP.get(t.mode, t.mode)}\n发现: {count} 个待处理项\n耗时: {t.last_duration_ms}ms")
+        else:
+            t.last_status = "clean"
+            t.last_message = "未发现待处理项"
+            db.commit()
+        return ok(status="ok", found=count, task=t.name, last_status=t.last_status, last_message=t.last_message, last_duration_ms=t.last_duration_ms)
+    except Exception as e:
+        t = db.query(AuditTask).filter(AuditTask.id == id).first()
+        if t:
+            t.last_status = "error"
+            t.last_message = str(e)
+            t.last_duration_ms = 0
+            db.commit()
+        sys_log(f"[TASK] ❌ 手动执行失败 [{id}]: {e}")
+        return err(status="error", message=str(e))
+    finally:
+        db.close()
+
 @app.get("/api/scan")
 def scan_api(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0"):
-    db = SessionLocal(); findings = scanner_service.perform_internal_scan(db, mode, lib, param_s, param_d)
-    def td(lst): return [{c.name: getattr(x, c.name) for c in x.__table__.columns} | {'display_path': os.path.dirname(x.path) + "/"} for x in lst]
-    res = [{"title": f["title"], "items": td(f["items"])} for f in findings]; db.close(); return res
+    db = SessionLocal()
+    findings = scanner_service.perform_internal_scan(db, mode, lib, param_s, param_d)
+    def td(lst):
+        rows = []
+        for x in lst:
+            row = {c.name: getattr(x, c.name) for c in x.__table__.columns}
+            row.update({
+                'display_path': os.path.dirname(x.path) + "/" if x.path else "",
+                'recommend_action': getattr(x, 'recommend_action', ''),
+                'recommend_reason': getattr(x, 'recommend_reason', ''),
+            })
+            rows.append(row)
+        return rows
+    res = []
+    for f in findings:
+        items = td(f["items"])
+        res.append({
+            "title": f["title"],
+            "items": items,
+            "summary": {
+                "keep": sum(1 for i in items if i.get('recommend_action') == 'keep'),
+                "delete": sum(1 for i in items if i.get('recommend_action') == 'delete'),
+                "total": len(items),
+            }
+        })
+    db.close()
+    return res
 
 # 🚀 修改：黑名单 API 返回 mode 和 id
 @app.get("/api/ignore")

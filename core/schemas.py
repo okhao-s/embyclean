@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 
 class DeleteRequest(BaseModel):
@@ -24,3 +24,4 @@ class ConfigRequest(BaseModel):
     pwd: Optional[str] = ""
     webhook: Optional[str] = ""
     cron_sync: Optional[str] = ""
+    prefs: Optional[Dict[str, Any]] = None

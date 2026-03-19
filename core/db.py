@@ -28,6 +28,10 @@ class AuditTask(Base):
     libraries = Column(String, default="")
     enabled = Column(Boolean, default=True)
     last_run = Column(String, default="0")
+    last_status = Column(String, default="idle")
+    last_found = Column(Integer, default=0)
+    last_message = Column(String, default="")
+    last_duration_ms = Column(Integer, default=0)
 
 class MediaItem(Base):
     __tablename__ = "media_items"
@@ -66,6 +70,16 @@ def init_db():
             if "mode" not in cols:
                 con.execute(text("ALTER TABLE ignored_items ADD COLUMN mode VARCHAR DEFAULT 'global'"))
             con.execute(text("CREATE INDEX IF NOT EXISTS idx_ignored_items_emby_mode ON ignored_items(emby_id, mode)"))
+        if "audit_tasks" in inspector.get_table_names():
+            cols = [c["name"] for c in inspector.get_columns("audit_tasks")]
+            if "last_status" not in cols:
+                con.execute(text("ALTER TABLE audit_tasks ADD COLUMN last_status VARCHAR DEFAULT 'idle'"))
+            if "last_found" not in cols:
+                con.execute(text("ALTER TABLE audit_tasks ADD COLUMN last_found INTEGER DEFAULT 0"))
+            if "last_message" not in cols:
+                con.execute(text("ALTER TABLE audit_tasks ADD COLUMN last_message VARCHAR DEFAULT ''"))
+            if "last_duration_ms" not in cols:
+                con.execute(text("ALTER TABLE audit_tasks ADD COLUMN last_duration_ms INTEGER DEFAULT 0"))
         con.exec_driver_sql("PRAGMA journal_mode=WAL;")
         con.commit()
 

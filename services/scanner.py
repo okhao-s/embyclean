@@ -1,7 +1,8 @@
+import json
 import os
 import re
 from sqlalchemy import func
-from core.db import MediaItem, IgnoredItem
+from core.db import MediaItem, IgnoredItem, get_conf
 
 MODE_MAP = {
     "av": "番号查重",
@@ -37,13 +38,13 @@ def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0"):
             if m:
                 key = (m.group(1) + "-" + m.group(2)).upper()
                 grp.setdefault(key, []).append(r)
-        return [{"title": k, "items": v} for k, v in grp.items() if len(v) > 1]
+        return apply_recommendations(db, mode, [{"title": k, "items": v} for k, v in grp.items() if len(v) > 1])
     elif mode == "size":
         sub = db.query(MediaItem.size).filter(MediaItem.size > 0).group_by(MediaItem.size).having(func.count(MediaItem.id) > 1)
         rows = q.filter(MediaItem.size.in_(sub)).all(); grp = {}
         for r in rows:
             grp.setdefault(r.size, []).append(r)
-        return [{"title": f"{k/1e6:.1f} MB", "items": v} for k, v in grp.items()]
+        return apply_recommendations(db, mode, [{"title": f"{k/1e6:.1f} MB", "items": v} for k, v in grp.items()])
     elif mode == "duration":
         all_items = q.filter(MediaItem.duration > 0.1).all(); grp = {}
         for item in all_items:
@@ -54,7 +55,7 @@ def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0"):
             if len(v) > 1:
                 v.sort(key=lambda x: x.size)
                 final_grp.append({"title": f"⏱️ {k} 秒", "items": v})
-        return final_grp
+        return apply_recommendations(db, mode, final_grp)
     elif mode == "smart":
         sub = db.query(MediaItem.name).group_by(MediaItem.name).having(func.count(MediaItem.id) > 1)
         rows = q.filter(MediaItem.name.in_(sub)).all(); grp = {}
@@ -62,14 +63,84 @@ def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0"):
             grp.setdefault(r.name, []).append(r)
         for _, v in grp.items():
             v.sort(key=lambda x: (x.resolution, x.size), reverse=True)
-        return [{"title": k, "items": v} for k, v in grp.items()]
+        return apply_recommendations(db, mode, [{"title": k, "items": v} for k, v in grp.items()])
     elif mode == "tiny":
         sq = q.filter(MediaItem.size < float(param_s) * 1e6, MediaItem.size > 0)
         if float(param_d) > 0:
             sq = sq.filter(MediaItem.duration < float(param_d))
         items = sq.all()
-        return [{"title": "极小资源", "items": items}] if items else []
+        return apply_recommendations(db, mode, [{"title": "极小资源", "items": items}] if items else [])
     elif mode == "noposter":
         items = q.filter(MediaItem.has_poster == False).all()
-        return [{"title": "封面缺失清单", "items": items}] if items else []
+        return apply_recommendations(db, mode, [{"title": "封面缺失清单", "items": items}] if items else [])
     return []
+
+
+def _pref(db, key, default):
+    raw = get_conf(db, key)
+    return raw if raw else default
+
+def _mark(items, keep_ids, reason_keep='推荐保留', reason_del='推荐删除'):
+    for item in items:
+        if item.emby_id in keep_ids:
+            item.recommend_action = 'keep'
+            item.recommend_reason = reason_keep
+        else:
+            item.recommend_action = 'delete'
+            item.recommend_reason = reason_del
+    return items
+
+def _score_item(item):
+    return (
+        1 if getattr(item, 'has_poster', False) else 0,
+        getattr(item, 'resolution', 0) or 0,
+        getattr(item, 'size', 0) or 0,
+    )
+
+def apply_recommendations(db, mode, grouped):
+    av_pref = _pref(db, 'pref.av.keep_priority', 'uc,c,raw')
+    size_pref = _pref(db, 'pref.size.keep', 'max')
+    duration_pref = _pref(db, 'pref.duration.keep', 'best')
+    smart_pref = _pref(db, 'pref.smart.keep', 'best')
+
+    for group in grouped:
+        items = group.get('items', [])
+        if not items:
+            continue
+        if mode == 'av':
+            order = [x.strip() for x in av_pref.split(',') if x.strip()]
+            scored = []
+            for item in items:
+                tag = 'raw'
+                if getattr(item, 'tag_uc', False):
+                    tag = 'uc'
+                elif getattr(item, 'tag_c', False):
+                    tag = 'c'
+                rank = order.index(tag) if tag in order else 999
+                scored.append((rank, -((getattr(item, 'size', 0) or 0)), item))
+            scored.sort(key=lambda x: (x[0], x[1]))
+            keep = scored[0][2]
+            reason = f"按番号保留优先级 {av_pref}"
+            _mark(items, {keep.emby_id}, reason, f"与推荐保留项重复：{keep.name}")
+        elif mode == 'size':
+            sorted_items = sorted(items, key=lambda x: (getattr(x, 'size', 0) or 0, _score_item(x)))
+            keep = sorted_items[-1] if size_pref == 'max' else sorted_items[0]
+            reason = '保留最大文件' if size_pref == 'max' else '保留最小文件'
+            _mark(items, {keep.emby_id}, reason, f"同大重复，建议清理其余副本")
+        elif mode in ('duration', 'smart'):
+            pref = duration_pref if mode == 'duration' else smart_pref
+            if pref == 'max':
+                keep = sorted(items, key=lambda x: getattr(x, 'size', 0) or 0)[-1]
+                reason = '保留最大文件'
+            elif pref == 'min':
+                keep = sorted(items, key=lambda x: getattr(x, 'size', 0) or 0)[0]
+                reason = '保留最小文件'
+            else:
+                keep = sorted(items, key=lambda x: _score_item(x), reverse=True)[0]
+                reason = '综合优先：封面 / 分辨率 / 文件大小'
+            _mark(items, {keep.emby_id}, reason, f"重复候选，建议删除")
+        elif mode in ('tiny', 'noposter'):
+            for item in items:
+                item.recommend_action = 'delete'
+                item.recommend_reason = '命中清理规则'
+    return grouped
