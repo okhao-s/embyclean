@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE="okhao/emby_cleaner:dev"
+IMAGE="okhao/emby_cleaner:test"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 
 cd "$DIR"
