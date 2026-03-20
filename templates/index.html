@@ -357,9 +357,13 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
           <div class="theme-option" data-theme-option="terminal" onclick="setTheme('terminal')"><div class="theme-preview terminal"></div><div class="font-bold text-sm">Retro Terminal</div><div class="text-xs text-slate-400 mt-1">终端味，但收敛点</div></div>
           <div class="theme-option" data-theme-option="paper" onclick="setTheme('paper')"><div class="theme-preview paper"></div><div class="font-bold text-sm">Paper Desk</div><div class="text-xs text-slate-400 mt-1">纸感、温和、文档台</div></div>
         </div>
+     </div>
 
      <div class="mt-4 bg-white/5 p-4 rounded-xl border border-white/5">
-        <label class="block text-xs font-bold text-slate-500 mb-3">智能处理偏好</label>
+        <div class="flex items-center justify-between gap-3 mb-3">
+          <label class="block text-xs font-bold text-slate-500">智能处理偏好</label>
+          <button class="btn btn-g px-4 py-2 text-xs" onclick="savePrefs()">保存偏好</button>
+        </div>
         <div class="grid grid-cols-2 gap-4">
           <div><label class="block text-[11px] text-slate-400 mb-2">番号保留优先级</label><input id="pref-av" placeholder="uc,c,raw" class="text-xs p-3"></div>
           <div><label class="block text-[11px] text-slate-400 mb-2">同大保留策略</label><select id="pref-size" class="text-xs p-3"><option value="max">保留最大文件</option><option value="min">保留最小文件</option></select></div>
@@ -367,7 +371,7 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
           <div><label class="block text-[11px] text-slate-400 mb-2">智能洗版保留策略</label><select id="pref-smart" class="text-xs p-3"><option value="best">综合最优</option><option value="max">保留最大文件</option><option value="min">保留最小文件</option></select></div>
         </div>
         <label class="flex items-center gap-3 mt-4 text-xs text-slate-300"><input type="checkbox" id="pref-confirm" class="w-4 h-4 accent-sky-500"> 批量删除/忽略/刷新前先预览</label>
-     </div>     </div>
+     </div>
     </div>
    </div>
    <div class="flex flex-col gap-10 h-full">
@@ -603,6 +607,28 @@ function editTask(id){const t=currentTasks.find(x=>x.id===id);if(t){$('m-id').va
 function openAddModal(){$('m-id').value='';$('m-name').value='定时任务';$('m-cron').value='0 8 * * *';$('m-mode').value=st.m;$('m-libs').value=Array.from(st.ls).join(',');$('modal').classList.add('open')}
 function closeModal(){$('modal').classList.remove('open')}
 async function submitTask(){const id=$('m-id').value;const b={name:$('m-name').value,cron:$('m-cron').value,mode:$('m-mode').value,libraries:$('m-libs').value,enabled:true};const method=id?'PUT':'POST';const url=id?`/api/tasks/${id}`:'/api/tasks';await fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});closeModal();loadTasks()}
+async function savePrefs(){
+  const c=await (await fetch('/api/config')).json();
+  const payload={
+    host: $('ch')?.value || c.host || '',
+    user: $('cu')?.value || c.user || '',
+    pwd: $('cp')?.value || '',
+    webhook: $('cw')?.value || c.webhook || '',
+    cron_sync: $('sync-cron-dash')?.value || c.cron_sync || '',
+    prefs:{
+      av_keep_priority:$('pref-av')?.value||'uc,c,raw',
+      size_keep:$('pref-size')?.value||'max',
+      duration_keep:$('pref-duration')?.value||'best',
+      smart_keep:$('pref-smart')?.value||'best',
+      confirm_batch:$('pref-confirm')?.checked?'true':'false'
+    }
+  };
+  const resp=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  await lc();
+  toast('✅ 偏好已保存');
+}
+
 async function save(){
   try{
     const payload={host:$('ch').value,user:$('cu').value,pwd:$('cp').value,webhook:$('cw').value,cron_sync:$('sync-cron-dash').value,prefs:{av_keep_priority:$('pref-av')?.value||'uc,c,raw',size_keep:$('pref-size')?.value||'max',duration_keep:$('pref-duration')?.value||'best',smart_keep:$('pref-smart')?.value||'best',confirm_batch:$('pref-confirm')?.checked?'true':'false'}};
