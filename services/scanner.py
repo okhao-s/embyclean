@@ -48,7 +48,7 @@ def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0"):
     elif mode == "duration":
         all_items = q.filter(MediaItem.duration > 0.1).all(); grp = {}
         for item in all_items:
-            key = round(item.duration, 1)
+            key = round(item.duration, 2)
             grp.setdefault(key, []).append(item)
         final_grp = []
         for k, v in grp.items():
