@@ -2,14 +2,16 @@ services:
   embycleaner:
     container_name: embyclean
     image: okhao/emby_cleaner:dev
-    build: .
+    build:
+      context: .
     ports:
       - "19898:19898"
     volumes:
-      - /root/docker/embyclean/embyclean/data:/app/data
+      - ./data:/app/data
     environment:
-      - TZ=Asia/Shanghai
-    restart: always
+      TZ: Asia/Shanghai
+    restart: unless-stopped
+    init: true
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:19898/api/health"]
       interval: 30s
