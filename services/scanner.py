@@ -97,48 +97,66 @@ def _score_item(item):
         getattr(item, 'size', 0) or 0,
     )
 
+def _pick_by_size_rule(items, rule):
+    ordered = list(items)
+    if rule == 'path_long':
+        ordered.sort(key=lambda x: ((x.path or ''), len(x.path or '')))
+        return ordered[-1], '按批量按钮规则：最长径'
+    if rule == 'path_short':
+        ordered.sort(key=lambda x: ((x.path or ''), len(x.path or '')))
+        return ordered[0], '按批量按钮规则：最短径'
+    if rule == 'name_long':
+        ordered.sort(key=lambda x: ((x.name or ''), len(x.name or '')))
+        return ordered[-1], '按批量按钮规则：最长名'
+    if rule == 'name_short':
+        ordered.sort(key=lambda x: ((x.name or ''), len(x.name or '')))
+        return ordered[0], '按批量按钮规则：最短名'
+    ordered.sort(key=lambda x: (getattr(x, 'size', 0) or 0, _score_item(x)))
+    return ordered[-1], '保留最大文件'
+
+def _pick_by_smart_rule(items, rule):
+    ordered = list(items)
+    if rule == 'reso_min':
+        ordered.sort(key=lambda x: ((getattr(x, 'resolution', 0) or 0), (getattr(x, 'size', 0) or 0)))
+        return ordered[0], '按批量按钮规则：最低分辨率'
+    ordered.sort(key=lambda x: ((getattr(x, 'resolution', 0) or 0), (getattr(x, 'size', 0) or 0)), reverse=True)
+    return ordered[0], '按批量按钮规则：最高分辨率'
+
 def apply_recommendations(db, mode, grouped):
-    av_pref = _pref(db, 'pref.av.keep_priority', 'uc,c,raw')
-    size_pref = _pref(db, 'pref.size.keep', 'max')
-    duration_pref = _pref(db, 'pref.duration.keep', 'best')
-    smart_pref = _pref(db, 'pref.smart.keep', 'best')
+    av_pref = _pref(db, 'pref.av.keep_priority', 'tag_uc')
+    size_pref = _pref(db, 'pref.size.keep', 'path_long')
+    duration_pref = _pref(db, 'pref.duration.keep', 'min')
+    smart_pref = _pref(db, 'pref.smart.keep', 'reso_max')
 
     for group in grouped:
         items = group.get('items', [])
         if not items:
             continue
         if mode == 'av':
-            order = [x.strip() for x in av_pref.split(',') if x.strip()]
-            scored = []
-            for item in items:
-                tag = 'raw'
-                if getattr(item, 'tag_uc', False):
-                    tag = 'uc'
-                elif getattr(item, 'tag_c', False):
-                    tag = 'c'
-                rank = order.index(tag) if tag in order else 999
-                scored.append((rank, -((getattr(item, 'size', 0) or 0)), item))
-            scored.sort(key=lambda x: (x[0], x[1]))
-            keep = scored[0][2]
-            reason = f"按番号保留优先级 {av_pref}"
+            tag_rule = av_pref if av_pref in {'tag_uc', 'tag_c', 'tag_raw'} else 'tag_uc'
+            matched = []
+            if tag_rule == 'tag_uc':
+                matched = [x for x in items if getattr(x, 'tag_uc', False)]
+                reason = '按批量按钮规则：选 [UC]'
+            elif tag_rule == 'tag_c':
+                matched = [x for x in items if getattr(x, 'tag_c', False)]
+                reason = '按批量按钮规则：选 [C]'
+            else:
+                matched = [x for x in items if not getattr(x, 'tag_c', False) and not getattr(x, 'tag_uc', False) and not getattr(x, 'tag_u', False)]
+                reason = '按批量按钮规则：选原版'
+            keep = sorted(matched or items, key=lambda x: (getattr(x, 'size', 0) or 0), reverse=True)[0]
             _mark(items, {keep.emby_id}, reason, f"与推荐保留项重复：{keep.name}")
         elif mode == 'size':
-            sorted_items = sorted(items, key=lambda x: (getattr(x, 'size', 0) or 0, _score_item(x)))
-            keep = sorted_items[-1] if size_pref == 'max' else sorted_items[0]
-            reason = '保留最大文件' if size_pref == 'max' else '保留最小文件'
-            _mark(items, {keep.emby_id}, reason, f"同大重复，建议清理其余副本")
-        elif mode in ('duration', 'smart'):
-            pref = duration_pref if mode == 'duration' else smart_pref
-            if pref == 'max':
-                keep = sorted(items, key=lambda x: getattr(x, 'size', 0) or 0)[-1]
-                reason = '保留最大文件'
-            elif pref == 'min':
-                keep = sorted(items, key=lambda x: getattr(x, 'size', 0) or 0)[0]
-                reason = '保留最小文件'
-            else:
-                keep = sorted(items, key=lambda x: _score_item(x), reverse=True)[0]
-                reason = '综合优先：封面 / 分辨率 / 文件大小'
-            _mark(items, {keep.emby_id}, reason, f"重复候选，建议删除")
+            keep, reason = _pick_by_size_rule(items, size_pref)
+            _mark(items, {keep.emby_id}, reason, '同大重复，建议清理其余副本')
+        elif mode == 'duration':
+            rule = duration_pref if duration_pref in {'min', 'max'} else 'min'
+            keep = sorted(items, key=lambda x: getattr(x, 'size', 0) or 0)[0 if rule == 'min' else -1]
+            reason = '按批量按钮规则：选最小文件' if rule == 'min' else '按批量按钮规则：选最大文件'
+            _mark(items, {keep.emby_id}, reason, '重复候选，建议删除')
+        elif mode == 'smart':
+            keep, reason = _pick_by_smart_rule(items, smart_pref)
+            _mark(items, {keep.emby_id}, reason, '重复候选，建议删除')
         elif mode in ('tiny', 'noposter'):
             for item in items:
                 item.recommend_action = 'delete'

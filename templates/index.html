@@ -365,10 +365,10 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
           <button class="btn btn-g px-4 py-2 text-xs" onclick="savePrefs()">保存偏好</button>
         </div>
         <div class="grid grid-cols-2 gap-4">
-          <div><label class="block text-[11px] text-slate-400 mb-2">番号保留优先级</label><input id="pref-av" placeholder="uc,c,raw" class="text-xs p-3"></div>
-          <div><label class="block text-[11px] text-slate-400 mb-2">同大保留策略</label><select id="pref-size" class="text-xs p-3"><option value="max">保留最大文件</option><option value="min">保留最小文件</option></select></div>
-          <div><label class="block text-[11px] text-slate-400 mb-2">时长重复保留策略</label><select id="pref-duration" class="text-xs p-3"><option value="best">综合最优</option><option value="max">保留最大文件</option><option value="min">保留最小文件</option></select></div>
-          <div><label class="block text-[11px] text-slate-400 mb-2">智能洗版保留策略</label><select id="pref-smart" class="text-xs p-3"><option value="best">综合最优</option><option value="max">保留最大文件</option><option value="min">保留最小文件</option></select></div>
+          <div><label class="block text-[11px] text-slate-400 mb-2">番号推荐规则</label><select id="pref-av" class="text-xs p-3"><option value="tag_uc">选 [UC]</option><option value="tag_c">选 [C]</option><option value="tag_raw">选原版</option></select></div>
+          <div><label class="block text-[11px] text-slate-400 mb-2">同大推荐规则</label><select id="pref-size" class="text-xs p-3"><option value="path_long">最长径</option><option value="path_short">最短径</option><option value="name_long">最长名</option><option value="name_short">最短名</option></select></div>
+          <div><label class="block text-[11px] text-slate-400 mb-2">时长重复推荐规则</label><select id="pref-duration" class="text-xs p-3"><option value="min">选最小文件</option><option value="max">选最大文件</option></select></div>
+          <div><label class="block text-[11px] text-slate-400 mb-2">智能洗版推荐规则</label><select id="pref-smart" class="text-xs p-3"><option value="reso_max">最高分辨率</option><option value="reso_min">最低分辨率</option></select></div>
         </div>
         <label class="flex items-center gap-3 mt-4 text-xs text-slate-300"><input type="checkbox" id="pref-confirm" class="w-4 h-4 accent-sky-500"> 批量删除/忽略/刷新前先预览</label>
      </div>
@@ -646,7 +646,7 @@ async function save(){
   }
 }
 async function saveSyncDash(){const ok=await save(); if(ok) await loadTasks()}
-async function lc(){const c=await(await fetch('/api/config')).json();if(c.host&&!c.host.startsWith('http'))c.host='http://'+c.host;if(c.host&&c.host.endsWith('/'))c.host=c.host.slice(0,-1);appConfig=c;$('ch').value=c.host;$('cu').value=c.user;$('cw').value=c.webhook;$('sync-cron-dash').value=c.cron_sync; const p=c.prefs||{}; if($('pref-av')) $('pref-av').value=p.av_keep_priority||'uc,c,raw'; if($('pref-size')) $('pref-size').value=p.size_keep||'max'; if($('pref-duration')) $('pref-duration').value=p.duration_keep||'best'; if($('pref-smart')) $('pref-smart').value=p.smart_keep||'best'; if($('pref-confirm')) $('pref-confirm').checked=(p.confirm_batch||'true')==='true'}
+async function lc(){const c=await(await fetch('/api/config')).json();if(c.host&&!c.host.startsWith('http'))c.host='http://'+c.host;if(c.host&&c.host.endsWith('/'))c.host=c.host.slice(0,-1);appConfig=c;$('ch').value=c.host;$('cu').value=c.user;$('cw').value=c.webhook;$('sync-cron-dash').value=c.cron_sync; const p=c.prefs||{}; if($('pref-av')) $('pref-av').value=['tag_uc','tag_c','tag_raw'].includes(p.av_keep_priority)?p.av_keep_priority:'tag_uc'; if($('pref-size')) $('pref-size').value=['path_long','path_short','name_long','name_short'].includes(p.size_keep)?p.size_keep:'path_long'; if($('pref-duration')) $('pref-duration').value=['min','max'].includes(p.duration_keep)?p.duration_keep:'min'; if($('pref-smart')) $('pref-smart').value=['reso_max','reso_min'].includes(p.smart_keep)?p.smart_keep:'reso_max'; if($('pref-confirm')) $('pref-confirm').checked=(p.confirm_batch||'true')==='true'}
 async function testWebhook(){try{const resp=await fetch('/api/test_webhook',{method:'POST'}); if(!resp.ok) throw new Error(`HTTP ${resp.status}`); toast('🔔 Webhook 测试已发送')}catch(e){toast(`❌ Webhook 测试失败: ${e.message||e}`)}}
 async function ll(){const r=await(await fetch('/api/logs')).json();$('lbox').innerHTML=r.map(l=>`<div class="log-line border-b border-white/5 py-1 break-all whitespace-pre-wrap">${l}</div>`).join('');$('lbox').scrollTop=$('lbox').scrollHeight}
 async function clearLogs(){try{const resp=await fetch('/api/logs/clear',{method:'POST'}); if(!resp.ok) throw new Error(`HTTP ${resp.status}`); await ll()}catch(e){toast(`❌ 清空日志失败: ${e.message||e}`)}}
