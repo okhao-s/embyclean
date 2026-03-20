@@ -130,7 +130,7 @@ async def do_sync(trigger="手动"):
             for l in libs:
                 lib_id = l['Id']; lib_name = l.get('Name', 'Unknown'); current_sync_lib = lib_name; start_index = 0
                 while True:
-                    params = {"ParentId": lib_id, "Recursive": "true", "IncludeItemTypes": "Movie,Video,Series", "Fields": "Path,MediaSources,ImageTags", "StartIndex": start_index, "Limit": 1000}
+                    params = {"ParentId": lib_id, "Recursive": "true", "IncludeItemTypes": "Movie,Video,Series", "Fields": "Path,MediaSources,ImageTags,DateCreated", "StartIndex": start_index, "Limit": 1000}
                     try:
                         res_items = await emby_client(db).get(f"{h}/emby/Items", params=params, headers=emby_headers(t))
                         data = res_items.json(); items = data.get("Items", []); total_count = data.get("TotalRecordCount", 0)
@@ -145,6 +145,7 @@ async def do_sync(trigger="手动"):
                             continue
                         seen_ids.add(i["Id"]); path = i.get("Path", ""); w, s = 0, 0
                         d = 0.0
+                        date_created = i.get("DateCreated", "") or ""
                         if i.get("MediaSources"):
                             ms = i["MediaSources"][0]; s = ms.get("Size", 0)
                             ticks = ms.get("RunTimeTicks", 0)
@@ -154,7 +155,7 @@ async def do_sync(trigger="手动"):
                                 w = ms["MediaStreams"][0].get("Width", 0)
                         base = os.path.splitext(os.path.basename(path))[0]
                         c, uc, u = scanner_service.decorate_media_flags(path, i.get('Name', ''))
-                        buf.append(MediaItem(emby_id=i["Id"], name=i.get("Name", ""), path=path, resolution=w, size=s, duration=d, has_poster="Primary" in i.get("ImageTags", {}), library_id=lib_id, tag_c=c, tag_uc=uc, tag_u=u))
+                        buf.append(MediaItem(emby_id=i["Id"], name=i.get("Name", ""), path=path, resolution=w, size=s, duration=d, has_poster="Primary" in i.get("ImageTags", {}), library_id=lib_id, date_created=date_created, tag_c=c, tag_uc=uc, tag_u=u))
                     if buf:
                         db.bulk_save_objects(buf); db.commit(); tot += len(buf)
                     sys_log(f"[SYNC] ⏳ 索引 [{lib_name}]: {min(start_index + len(items), total_count)} / {total_count}")
@@ -176,13 +177,14 @@ async def delayed_single_update(ids: List[str], host: str, token: str):
     try:
         for eid in ids:
             try:
-                res = await emby_client(db).get(f"{host.rstrip('/')}/emby/Items", params={"Ids": eid, "Fields": "MediaSources,ImageTags"}, headers=emby_headers(token))
+                res = await emby_client(db).get(f"{host.rstrip('/')}/emby/Items", params={"Ids": eid, "Fields": "MediaSources,ImageTags,DateCreated"}, headers=emby_headers(token))
                 if res.status_code == 200:
                     items = res.json().get("Items", [])
                     if items:
                         item_data = items[0]; local_item = db.query(MediaItem).filter(MediaItem.emby_id == eid).first()
                         if local_item:
                             local_item.has_poster = "Primary" in item_data.get("ImageTags", {})
+                            local_item.date_created = item_data.get("DateCreated", "") or local_item.date_created or ""
                             if item_data.get("MediaSources"):
                                 local_item.size = item_data["MediaSources"][0].get("Size", 0)
                             updated += 1

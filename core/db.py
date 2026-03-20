@@ -44,6 +44,7 @@ class MediaItem(Base):
     duration = Column(Float, default=0.0)
     has_poster = Column(Boolean)
     library_id = Column(String)
+    date_created = Column(String, default="")
     tag_c = Column(Boolean, default=False)
     tag_uc = Column(Boolean, default=False)
     tag_u = Column(Boolean, default=False)
@@ -59,10 +60,13 @@ def init_db():
             cols = [c["name"] for c in inspector.get_columns("media_items")]
             if "duration" not in cols:
                 con.execute(text("ALTER TABLE media_items ADD COLUMN duration FLOAT DEFAULT 0"))
+            if "date_created" not in cols:
+                con.execute(text("ALTER TABLE media_items ADD COLUMN date_created VARCHAR DEFAULT ''"))
             con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_library_id ON media_items(library_id)"))
             con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_size ON media_items(size)"))
             con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_duration ON media_items(duration)"))
             con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_name ON media_items(name)"))
+            con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_date_created ON media_items(date_created)"))
         if "ignored_items" in inspector.get_table_names():
             cols = [c["name"] for c in inspector.get_columns("ignored_items")]
             if "name" not in cols:
