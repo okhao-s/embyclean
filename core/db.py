@@ -49,6 +49,54 @@ class MediaItem(Base):
     tag_uc = Column(Boolean, default=False)
     tag_u = Column(Boolean, default=False)
 
+class ScanJob(Base):
+    __tablename__ = "scan_jobs"
+    id = Column(Integer, primary_key=True)
+    source = Column(String, default="manual")
+    source_ref = Column(String, default="")
+    mode = Column(String, default="")
+    libraries = Column(String, default="")
+    params_json = Column(String, default="{}")
+    status = Column(String, default="pending")
+    message = Column(String, default="")
+    snapshot_id = Column(Integer, default=0)
+    total_groups = Column(Integer, default=0)
+    total_items = Column(Integer, default=0)
+    started_at = Column(String, default="")
+    finished_at = Column(String, default="")
+    duration_ms = Column(Integer, default=0)
+
+class ScanSnapshot(Base):
+    __tablename__ = "scan_snapshots"
+    id = Column(Integer, primary_key=True)
+    job_id = Column(Integer, default=0)
+    source = Column(String, default="manual")
+    mode = Column(String, default="")
+    libraries = Column(String, default="")
+    params_json = Column(String, default="{}")
+    summary_json = Column(String, default="{}")
+    created_at = Column(String, default="")
+
+class ScanSnapshotGroup(Base):
+    __tablename__ = "scan_snapshot_groups"
+    id = Column(Integer, primary_key=True)
+    snapshot_id = Column(Integer, default=0)
+    group_index = Column(Integer, default=0)
+    title = Column(String, default="")
+    summary_json = Column(String, default="{}")
+    items_json = Column(String, default="[]")
+
+class ActionLog(Base):
+    __tablename__ = "action_logs"
+    id = Column(Integer, primary_key=True)
+    level = Column(String, default="info")
+    category = Column(String, default="system")
+    action = Column(String, default="")
+    detail = Column(String, default="")
+    ref_type = Column(String, default="")
+    ref_id = Column(String, default="")
+    created_at = Column(String, default="")
+
 engine = create_engine(DB_PATH, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -84,6 +132,16 @@ def init_db():
                 con.execute(text("ALTER TABLE audit_tasks ADD COLUMN last_message VARCHAR DEFAULT ''"))
             if "last_duration_ms" not in cols:
                 con.execute(text("ALTER TABLE audit_tasks ADD COLUMN last_duration_ms INTEGER DEFAULT 0"))
+        if "scan_jobs" in inspector.get_table_names():
+            con.execute(text("CREATE INDEX IF NOT EXISTS idx_scan_jobs_status_started ON scan_jobs(status, started_at)"))
+            con.execute(text("CREATE INDEX IF NOT EXISTS idx_scan_jobs_source_ref ON scan_jobs(source, source_ref)"))
+        if "scan_snapshots" in inspector.get_table_names():
+            con.execute(text("CREATE INDEX IF NOT EXISTS idx_scan_snapshots_job_created ON scan_snapshots(job_id, created_at)"))
+        if "scan_snapshot_groups" in inspector.get_table_names():
+            con.execute(text("CREATE INDEX IF NOT EXISTS idx_scan_snapshot_groups_snapshot ON scan_snapshot_groups(snapshot_id, group_index)"))
+        if "action_logs" in inspector.get_table_names():
+            con.execute(text("CREATE INDEX IF NOT EXISTS idx_action_logs_created ON action_logs(created_at)"))
+            con.execute(text("CREATE INDEX IF NOT EXISTS idx_action_logs_category_level ON action_logs(category, level)"))
         con.exec_driver_sql("PRAGMA journal_mode=WAL;")
         con.commit()
 
