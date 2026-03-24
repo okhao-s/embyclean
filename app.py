@@ -92,12 +92,12 @@ async def get_token(db, force=False):
     global global_token
     if global_token and not force:
         return global_token
-    h, u, p = normalize_host(get_conf(db, "host")), get_conf(db, "user"), get_conf(db, "pwd")
+    h, u, p = get_conf(db, "host"), get_conf(db, "user"), get_conf(db, "pwd")
     if not h or not u:
         return ""
     try:
         r = await emby_client(db).post(
-            f"{h}/Users/AuthenticateByName",
+            f"{h.rstrip('/')}/Users/AuthenticateByName",
             json={"Username": u, "Pw": p},
             headers=EMBY_HEADERS,
             timeout=10.0,
@@ -122,16 +122,16 @@ async def send_webhook(db, command, detail, raw=False):
 async def do_sync(trigger="手动"):
     global current_sync_lib
     if sync_lock.locked():
-        sys_log(f"[SYNC] ⚠️ 已有同步进行中，忽略本次 {trigger} 请求", category="sync", action="sync_skip")
+        sys_log(f"[SYNC] ⚠️ 已有同步进行中，忽略本次 {trigger} 请求")
         return False
     async with sync_lock:
         current_sync_lib = "初始化..."
-        sys_log(f"[SYNC] >>> {trigger}同步启动...", category="sync", action="sync_start")
+        sys_log(f"[SYNC] >>> {trigger}同步启动...")
         db = SessionLocal()
         try:
-            h, t, error = ensure_emby_ready(db)
-            if error:
-                sys_log(f"[SYNC] ❌ {error.get('message', '认证失败')}", category="sync", action="sync_error", level="error")
+            h, t = get_conf(db, "host"), await get_token(db)
+            if not t:
+                sys_log("[SYNC] ❌ 授权失败")
                 return False
             res = await emby_client(db).get(f"{h}/Library/MediaFolders", headers=emby_headers(t))
             libs = res.json().get("Items", [])
@@ -145,7 +145,7 @@ async def do_sync(trigger="手动"):
                         res_items = await emby_client(db).get(f"{h}/emby/Items", params=params, headers=emby_headers(t))
                         data = res_items.json(); items = data.get("Items", []); total_count = data.get("TotalRecordCount", 0)
                     except Exception as e:
-                        sys_log(f"[SYNC] ❌ 拉取媒体项失败 [{lib_name}] start={start_index}: {e}", category="sync", action="sync_items_error", level="error")
+                        sys_log(f"[SYNC] ❌ 拉取媒体项失败 [{lib_name}] start={start_index}: {e}")
                         break
                     if not items:
                         break
@@ -163,19 +163,20 @@ async def do_sync(trigger="手动"):
                                 d = float(ticks) / 10000000.0
                             if ms.get("MediaStreams"):
                                 w = ms["MediaStreams"][0].get("Width", 0)
+                        base = os.path.splitext(os.path.basename(path))[0]
                         c, uc, u = scanner_service.decorate_media_flags(path, i.get('Name', ''))
                         buf.append(MediaItem(emby_id=i["Id"], name=i.get("Name", ""), path=path, resolution=w, size=s, duration=d, has_poster="Primary" in i.get("ImageTags", {}), library_id=lib_id, date_created=date_created, tag_c=c, tag_uc=uc, tag_u=u))
                     if buf:
                         db.bulk_save_objects(buf); db.commit(); tot += len(buf)
-                    sys_log(f"[SYNC] ⏳ 索引 [{lib_name}]: {min(start_index + len(items), total_count)} / {total_count}", category="sync", action="sync_progress")
+                    sys_log(f"[SYNC] ⏳ 索引 [{lib_name}]: {min(start_index + len(items), total_count)} / {total_count}")
                     start_index += len(items)
                     if start_index >= total_count:
                         break
-            sys_log(f"[SYNC] ✅ 同步完成 (共 {tot} 条)", category="sync", action="sync_complete")
+            sys_log(f"[SYNC] ✅ 同步完成 (共 {tot} 条)")
             await send_webhook(db, "全量同步", f"入库 {tot} 条。")
             return True
         except Exception as e:
-            sys_log(f"[SYNC] ❌ 异常: {e}", category="sync", action="sync_error", level="error")
+            sys_log(f"[SYNC] ❌ 异常: {e}")
             return False
         finally:
             db.close(); current_sync_lib = ""
@@ -265,28 +266,6 @@ async def shutdown_event():
 def health_api():
     return {"status": "ok", "sync_running": sync_lock.locked()}
 
-def normalize_host(host: str) -> str:
-    host = (host or "").strip()
-    if not host:
-        return ""
-    if not host.startswith("http://") and not host.startswith("https://"):
-        host = f"http://{host}"
-    return host.rstrip('/')
-
-def ensure_emby_ready(db):
-    host = normalize_host(get_conf(db, "host") or "")
-    if not host:
-        return "", "", err(status="error", message="Emby 未配置")
-    try:
-        token = asyncio.run(get_token(db))
-    except RuntimeError:
-        token = ""
-    except Exception:
-        token = ""
-    if not token:
-        return host, "", err(status="error", message="Emby 认证失败")
-    return host, token, None
-
 @app.get("/api/status")
 async def st_api():
     db = SessionLocal()
@@ -359,57 +338,18 @@ def cfg_get():
     db.close(); return r
 
 @app.get("/api/tasks")
-def tasks_get():
-    db = SessionLocal()
-    try:
-        rows = db.query(AuditTask).order_by(AuditTask.id.asc()).all()
-        return rows
-    finally:
-        db.close()
+def tasks_get(): db = SessionLocal(); r = db.query(AuditTask).order_by(AuditTask.id.asc()).all(); db.close(); return r
 @app.post("/api/tasks")
 def task_post(t: TaskReq):
-    db = SessionLocal()
-    try:
-        db.add(AuditTask(name=t.name, mode=t.mode, cron=t.cron, libraries=t.libraries, enabled=t.enabled))
-        db.commit()
-        return ok(status="ok")
-    except Exception as e:
-        db.rollback()
-        sys_log(f"[TASK] ❌ 创建任务失败: {e}", category="system", action="task_create", level="error")
-        return err(status="error", message=str(e))
-    finally:
-        db.close()
+    db = SessionLocal(); db.add(AuditTask(name=t.name, mode=t.mode, cron=t.cron, libraries=t.libraries, enabled=t.enabled)); db.commit(); db.close(); return {"status": "ok"}
 @app.put("/api/tasks/{tid}")
 def task_put(tid: int, t: TaskReq):
     db = SessionLocal(); x = db.query(AuditTask).filter(AuditTask.id == tid).first()
-    if not x:
-        db.close(); return err(status="error", message="任务不存在")
-    try:
-        x.name, x.mode, x.cron, x.libraries, x.enabled = t.name, t.mode, t.cron, t.libraries, t.enabled
-        db.commit()
-        return ok(status="ok")
-    except Exception as e:
-        db.rollback()
-        sys_log(f"[TASK] ❌ 更新任务失败 [{tid}]: {e}", category="system", action="task_update", level="error")
-        return err(status="error", message=str(e))
-    finally:
-        db.close()
+    if x: x.name, x.mode, x.cron, x.libraries = t.name, t.mode, t.cron, t.libraries; db.commit()
+    db.close(); return ok(status="ok")
 @app.delete("/api/tasks/{id}")
 def task_del(id: int):
-    db = SessionLocal()
-    try:
-        row = db.query(AuditTask).filter(AuditTask.id == id).first()
-        if not row:
-            return err(status="error", message="任务不存在")
-        db.delete(row)
-        db.commit()
-        return ok(status="ok")
-    except Exception as e:
-        db.rollback()
-        sys_log(f"[TASK] ❌ 删除任务失败 [{id}]: {e}", category="system", action="task_delete", level="error")
-        return err(status="error", message=str(e))
-    finally:
-        db.close()
+    db = SessionLocal(); db.query(AuditTask).filter(AuditTask.id == id).delete(); db.commit(); db.close(); return {"status": "ok"}
 
 @app.post("/api/tasks/{id}/run")
 async def task_run_now(id: int):
@@ -450,55 +390,49 @@ async def task_run_now(id: int):
 @app.get("/api/scan")
 def scan_api(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0"):
     db = SessionLocal()
-    try:
-        findings = scanner_service.perform_internal_scan(db, mode, lib, param_s, param_d)
-        snapshot_meta = persist_snapshot(db, groups=findings, mode=mode, libraries=lib, params={"param_s": param_s, "param_d": param_d}, source="manual")
-        def td(lst):
-            rows = []
-            for x in lst:
-                row = {c.name: getattr(x, c.name) for c in x.__table__.columns}
-                row.update({
-                    'display_path': os.path.dirname(x.path) + "/" if x.path else "",
-                    'recommend_action': getattr(x, 'recommend_action', ''),
-                    'recommend_reason': getattr(x, 'recommend_reason', ''),
-                    'media': {
-                        'emby_id': x.emby_id,
-                        'title': x.name,
-                        'library_id': x.library_id,
-                        'has_poster': bool(x.has_poster),
-                        'date_created': x.date_created or '',
-                    },
-                    'file': {
-                        'path': x.path,
-                        'dirname': os.path.dirname(x.path) if x.path else '',
-                        'basename': os.path.basename(x.path) if x.path else '',
-                        'size': x.size or 0,
-                        'duration': x.duration or 0,
-                        'resolution': x.resolution or 0,
-                    }
-                })
-                rows.append(row)
-            return rows
-        res = []
-        for f in findings:
-            items = td(f["items"])
-            res.append({
-                "title": f["title"],
-                "items": items,
-                "summary": {
-                    "keep": sum(1 for i in items if i.get('recommend_action') == 'keep'),
-                    "delete": sum(1 for i in items if i.get('recommend_action') == 'delete'),
-                    "total": len(items),
+    findings = scanner_service.perform_internal_scan(db, mode, lib, param_s, param_d)
+    snapshot_meta = persist_snapshot(db, groups=findings, mode=mode, libraries=lib, params={"param_s": param_s, "param_d": param_d}, source="manual")
+    def td(lst):
+        rows = []
+        for x in lst:
+            row = {c.name: getattr(x, c.name) for c in x.__table__.columns}
+            row.update({
+                'display_path': os.path.dirname(x.path) + "/" if x.path else "",
+                'recommend_action': getattr(x, 'recommend_action', ''),
+                'recommend_reason': getattr(x, 'recommend_reason', ''),
+                'media': {
+                    'emby_id': x.emby_id,
+                    'title': x.name,
+                    'library_id': x.library_id,
+                    'has_poster': bool(x.has_poster),
+                    'date_created': x.date_created or '',
+                },
+                'file': {
+                    'path': x.path,
+                    'dirname': os.path.dirname(x.path) if x.path else '',
+                    'basename': os.path.basename(x.path) if x.path else '',
+                    'size': x.size or 0,
+                    'duration': x.duration or 0,
+                    'resolution': x.resolution or 0,
                 }
             })
-        add_action_log(db, category="scan", action="scan_complete", detail=f"模式={mode} 库={lib or 'all'} 分组={snapshot_meta['summary']['groups']} 项目={snapshot_meta['summary']['items']}", ref_type="snapshot", ref_id=str(snapshot_meta["snapshot_id"]))
-        return {"groups": res, "snapshot": snapshot_meta}
-    except Exception as e:
-        db.rollback()
-        sys_log(f"[SCAN] ❌ 扫描失败 [{mode}]: {e}", category="scan", action="scan_error", level="error")
-        return err(status="error", message=str(e), groups=[], snapshot=None)
-    finally:
-        db.close()
+            rows.append(row)
+        return rows
+    res = []
+    for f in findings:
+        items = td(f["items"])
+        res.append({
+            "title": f["title"],
+            "items": items,
+            "summary": {
+                "keep": sum(1 for i in items if i.get('recommend_action') == 'keep'),
+                "delete": sum(1 for i in items if i.get('recommend_action') == 'delete'),
+                "total": len(items),
+            }
+        })
+    add_action_log(db, category="scan", action="scan_complete", detail=f"模式={mode} 库={lib or 'all'} 分组={snapshot_meta['summary']['groups']} 项目={snapshot_meta['summary']['items']}", ref_type="snapshot", ref_id=str(snapshot_meta["snapshot_id"]))
+    db.close()
+    return {"groups": res, "snapshot": snapshot_meta}
 
 # 🚀 修改：黑名单 API 返回 mode 和 id
 @app.get("/api/ignore")
@@ -620,48 +554,24 @@ def history_detail(snapshot_id: int):
 async def idx_p(r: Request): return templates.TemplateResponse("index.html", {"request": r})
 @app.get("/api/libraries")
 async def libs_g():
-    db = SessionLocal()
-    h = (get_conf(db, "host") or "").strip()
-    if not h:
-        db.close()
-        return err(status="error", message="Emby 未配置", items=[])
-    if not h.startswith("http://") and not h.startswith("https://"):
-        h = f"http://{h}"
+    db = SessionLocal(); h, t = get_conf(db, "host"), await get_token(db)
     try:
-        t = await get_token(db)
-        if not t:
-            return err(status="error", message="Emby 认证失败", items=[])
-        r = await emby_client(db).get(f"{h.rstrip('/')}/Library/MediaFolders", headers=emby_headers(t))
-        return ok(status="ok", items=r.json().get("Items", []))
+        r = await emby_client(db).get(f"{h}/Library/MediaFolders", headers=emby_headers(t))
+        return r.json().get("Items", [])
     except Exception as e:
-        sys_log(f"[LIBS] ❌ 获取媒体库失败: {e}", category="system", action="libs_error", level="error")
-        return err(status="error", message=str(e), items=[])
+        sys_log(f"[LIBS] ❌ 获取媒体库失败: {e}")
+        return []
     finally:
         db.close()
 @app.post("/api/sync")
 def sync_p(b: BackgroundTasks):
-    db = SessionLocal()
-    try:
-        h = (get_conf(db, "host") or "").strip()
-        if not h:
-            return err(status="error", message="Emby 未配置")
-    finally:
-        db.close()
     if sync_lock.locked():
         return ok(status="already_running")
     b.add_task(do_sync)
     return ok(status="started")
 @app.post("/api/test_webhook")
 async def tw_p():
-    db = SessionLocal()
-    try:
-        await send_webhook(db, "测试", "链路正常。")
-        return ok(status="ok")
-    except Exception as e:
-        sys_log(f"[WEBHOOK] ❌ 测试失败: {e}", category="system", action="webhook_test", level="error")
-        return err(status="error", message=str(e))
-    finally:
-        db.close()
+    db = SessionLocal(); await send_webhook(db, "测试", "链路正常。"); db.close(); return ok(status="ok")
 @app.post("/api/refresh")
 async def refresh_p(r: RefreshRequest, b: BackgroundTasks):
     db = SessionLocal(); h, t = get_conf(db, "host"), await get_token(db)

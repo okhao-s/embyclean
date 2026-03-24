@@ -401,7 +401,7 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
 <div id="batch-preview" class="modal"><div class="modal-box max-w-xl"><div class="text-xl font-bold mb-4 text-white">批量操作预览</div><div id="batch-preview-body" class="text-sm text-slate-300 space-y-2"></div><div class="flex justify-end gap-3 mt-6"><button class="btn btn-g px-5" onclick="closeBatchPreview()">取消</button><button class="btn btn-p px-5" id="batch-preview-confirm">确认执行</button></div></div></div>
 <script>
 const $=id=>document.getElementById(id);
-let appConfig={},st={m:'av',ls:new Set(),d:[],flat:[],p:1,s:new Set(),sid:'',ignS:new Set(),loaded:0,loading:false,snapshot:null,history:[],pollFails:0,pollBusy:false},PAGE_SIZE=50,currentTasks=[];
+let appConfig={},st={m:'av',ls:new Set(),d:[],flat:[],p:1,s:new Set(),sid:'',ignS:new Set(),loaded:0,loading:false,snapshot:null,history:[]},PAGE_SIZE=50,currentTasks=[];
 const THEMES=['obsidian','frost','terminal','paper'];
 function applyTheme(theme){const t=THEMES.includes(theme)?theme:'obsidian';document.body.setAttribute('data-theme',t);document.querySelectorAll('[data-theme-option]').forEach(el=>el.classList.toggle('active', el.dataset.themeOption===t));localStorage.setItem('embyclean_theme', t)}
 function setTheme(theme){applyTheme(theme);toast(`🎨 已切换到 ${theme}`)}
@@ -413,7 +413,7 @@ function selectedSummary(){const items=selectedItems(); const totalSize=items.re
 function previewBatch(actionLabel, onConfirm){const summary=selectedSummary(); if(!summary.count){toast('❌ 未勾选');return} const body=`<div class="grid grid-cols-2 gap-3"><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">操作</div><div class="text-white font-bold mt-1">${actionLabel}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">选中条目</div><div class="text-white font-bold mt-1">${summary.count}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">涉及分组</div><div class="text-white font-bold mt-1">${summary.groups}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">预计影响体积</div><div class="text-white font-bold mt-1">${bytesHuman(summary.totalSize)}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">推荐删除命中</div><div class="text-white font-bold mt-1">${summary.recommendedDelete}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">推荐保留命中</div><div class="text-white font-bold mt-1">${summary.recommendedKeep}</div></div></div>`; $('batch-preview-body').innerHTML=body; $('batch-preview-confirm').onclick=()=>{closeBatchPreview(); onConfirm()}; $('batch-preview').classList.add('open')}
 function prefConfirmEnabled(){return $('pref-confirm') ? $('pref-confirm').checked : true}
 function chooseRecommended(){const flat=getFlatSlice().slice(0, st.loaded); flat.forEach(i=>{ if(i.recommend_action==='delete') st.s.add(i.emby_id); else st.s.delete(i.emby_id)}); st.loaded=0; $('rbox').innerHTML=''; renderMore(flat.length)}
-window.onload=()=>{applyTheme(localStorage.getItem('embyclean_theme')||'obsidian');poll();gl();lc();loadHistory();setInterval(()=>poll(),8000);setInterval(()=>{if($('p-logs').classList.contains('active')) ll()},8000)};
+window.onload=()=>{applyTheme(localStorage.getItem('embyclean_theme')||'obsidian');poll();gl();lc();loadHistory();setInterval(poll,5000);setInterval(()=>{if($('p-logs').classList.contains('active')) ll()},5000)};
 
 /* 🚀 监听滚动事件：无限加载 */
 $('content-area').addEventListener('scroll', () => {
@@ -428,27 +428,17 @@ function confirmUI(t,d,i,y){$('conf-title').innerText=t;$('conf-desc').innerText
 function closeConf(){$('conf-modal').classList.remove('open')}
 function nav(p,el){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));$('p-'+p).classList.add('active');if(el){document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));el.classList.add('active')} if(p=='settings'){lc();loadIgnored();loadTasks()} if(p=='logs'){ll()} if(p=='history'){loadHistory()}}
 async function poll(){
- if(st.pollBusy) return;
- st.pollBusy = true;
- try{
- const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),6500);const resp=await fetch('/api/status',{signal:controller.signal,cache:'no-store'});clearTimeout(timer);const r=await resp.json();
- st.pollFails = 0;
+ try{const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),4000);const resp=await fetch('/api/status',{signal:controller.signal});clearTimeout(timer);const r=await resp.json();
  $('sb-loc').innerText=r.local_cache;$('sb-cln').innerText=r.cleaned_count;$('sb-spc').innerText=(r.saved_space/1e9).toFixed(2)+" GB";
  if(r.connected){$('st-name').innerText=r.server_name||"✅ 已连接";$('st-name').className="font-bold text-white text-lg truncate";$('dot').className="dot-main dot-online"}else{$('st-name').innerText="离线";$('dot').className="dot-main"}
  $('st-ver').innerText=`版本: ${r.server_ver||'--'}`;$('st-user').innerText=`用户: ${r.user_name||'--'}`;st.sid=r.server_id;
  if(document.activeElement !== $('sync-cron-dash')) $('sync-cron-dash').value=r.sync_cron;
  const b=$('btn-sync-side');
- if(r.is_syncing){b.disabled=true;b.innerText="运行中...";$('sync-state-display').innerText=r.sync_lib?`⏳ 索引 [${r.sync_lib}]...`:"⏳ 准备中..."}else{b.disabled=!r.connected;b.innerText="🔄 立即同步元数据";$('sync-state-display').innerText=r.connected?"✅ 同步器就绪":"⚠️ Emby 未配置/离线"}
- }catch(e){
- st.pollFails += 1;
- $('st-name').innerText=st.pollFails >= 2 ? '状态重连中...' : '状态暂不可用';
- $('dot').className='dot-main';
- $('sync-state-display').innerText=`⚠️ 状态获取失败（重试 ${st.pollFails}）`;
- } finally {
- st.pollBusy = false;
- }}
-function sync(){if(!appConfig.host){toast('❌ 请先配置 Emby');return}confirmUI("全量同步","耗时取决于媒体库大小。","🔄",async()=>{const r=await fetch('/api/sync',{method:'POST'});const d=await r.json();if(d.status==='error'||d.ok===false)toast(`❌ ${d.message||'同步下发失败'}`);else toast("✅ 同步指令已下发")})}
-async function gl(){const c=await(await fetch('/api/config')).json(); if(!c.host){$('libs').innerHTML='<div class="text-slate-500 text-sm">请先在系统配置里填写 Emby 地址。</div>'; return} const r=await fetch('/api/libraries'); const d=await r.json(); const items=Array.isArray(d)?d:(d.items||[]); if((d.status&&d.status==='error')||(!Array.isArray(d)&&d.ok===false)){$('libs').innerHTML=`<div class="text-rose-400 text-sm">${d.message||'获取媒体库失败'}</div>`; return} $('libs').innerHTML=items.map(l=>`<div class="lib-card" onclick="tl(this,'${l.Id}')"><img src="${l.ImageTags?.Primary?c.host+'/emby/Items/'+l.Id+'/Images/Primary?maxHeight=300':''}"><div class="lib-name">${l.Name}</div></div>`).join('')||'<div class="text-slate-500 text-sm">暂无媒体库</div>'}
+ if(r.is_syncing){b.disabled=true;b.innerText="运行中...";$('sync-state-display').innerText=r.sync_lib?`⏳ 索引 [${r.sync_lib}]...`:"⏳ 准备中..."}else{b.disabled=false;b.innerText="🔄 立即同步元数据";$('sync-state-display').innerText=r.connected?"✅ 同步器就绪":"⚠️ Emby 离线 / 非本机"}
+ }catch(e){$('st-name').innerText='状态暂不可用';$('dot').className='dot-main';$('sync-state-display').innerText='⚠️ 状态获取失败'}}
+function sync(){confirmUI("全量同步","耗时取决于媒体库大小。","🔄",()=>{fetch('/api/sync',{method:'POST'});toast("✅ 同步指令已下发")})}
+async function gl(){const r=await fetch('/api/libraries');const d=await r.json();const c=await(await fetch('/api/config')).json();
+ $('libs').innerHTML=d.map(l=>`<div class="lib-card" onclick="tl(this,'${l.Id}')"><img src="${l.ImageTags?.Primary?c.host+'/emby/Items/'+l.Id+'/Images/Primary?maxHeight=300':''}"><div class="lib-name">${l.Name}</div></div>`).join('')}
 function tl(e,i){if(st.ls.has(i)){st.ls.delete(i);e.classList.remove('selected')}else{st.ls.add(i);e.classList.add('selected')}}
 function mode(m,e){st.m=m;document.querySelectorAll('.mode-btn').forEach(x=>x.classList.remove('active'));if(e)e.classList.add('active');if(m=='tiny')$('opt-t').classList.remove('hidden');else $('opt-t').classList.add('hidden')}
 
@@ -458,7 +448,6 @@ async function scan(){
       let u=`/api/scan?mode=${st.m}&lib=${Array.from(st.ls).join(',')}&param_s=${$('inp-t').value}&param_d=${$('inp-d').value}`;
       const r=await fetch(u);
       const payload=await r.json();
-      if(payload.status==='error'||payload.ok===false){toast(`❌ ${payload.message||'扫描失败'}`); return}
       st.d=payload.groups||[];
       st.snapshot=payload.snapshot||null;
       prepareDerivedData();
@@ -471,8 +460,6 @@ async function scan(){
       nav('results');
       renderMore();
       await loadHistory();
-    } catch(e) {
-      toast(`❌ 扫描失败: ${e.message||e}`)
     } finally {
       $('loader').style.display='none';
     }
@@ -496,46 +483,31 @@ function renderScanMeta(){
 }
 
 async function loadHistory(){
-  try {
-    const r=await fetch('/api/history?limit=30');
-    const data=await r.json();
-    st.history=Array.isArray(data)?data:[];
-    $('history-list').innerHTML=st.history.length?st.history.map(x=>`<div class="p-4 rounded-xl border border-white/5 bg-white/5 mb-3 cursor-pointer hover:bg-white/10" onclick="showHistory(${x.id})"><div class="flex justify-between items-center gap-3"><div class="font-bold text-white">#${x.id} · ${x.mode}</div><div class="text-[10px] text-sky-300">${x.source||'manual'}</div></div><div class="text-xs text-slate-400 mt-2">分组 ${x.summary?.groups||0} · 项目 ${x.summary?.items||0} · 删除 ${x.summary?.delete||0}</div><div class="text-[11px] text-slate-500 mt-2 break-all">${x.created_at||''}</div></div>`).join(''):'<div class="text-slate-500 text-sm">暂无扫描历史。</div>';
-  } catch(e) {
-    $('history-list').innerHTML=`<div class="text-rose-400 text-sm">历史记录加载失败：${e.message||e}</div>`;
-  }
+  const r=await fetch('/api/history?limit=30');
+  st.history=await r.json();
+  $('history-list').innerHTML=st.history.length?st.history.map(x=>`<div class="p-4 rounded-xl border border-white/5 bg-white/5 mb-3 cursor-pointer hover:bg-white/10" onclick="showHistory(${x.id})"><div class="flex justify-between items-center gap-3"><div class="font-bold text-white">#${x.id} · ${x.mode}</div><div class="text-[10px] text-sky-300">${x.source||'manual'}</div></div><div class="text-xs text-slate-400 mt-2">分组 ${x.summary?.groups||0} · 项目 ${x.summary?.items||0} · 删除 ${x.summary?.delete||0}</div><div class="text-[11px] text-slate-500 mt-2 break-all">${x.created_at||''}</div></div>`).join(''):'<div class="text-slate-500 text-sm">暂无扫描历史。</div>';
 }
 
 async function showHistory(id){
-  try {
-    const r=await fetch(`/api/history/${id}`);
-    if(!r.ok) throw new Error(`HTTP ${r.status}`);
-    const x=await r.json();
-    $('history-detail').innerHTML=`<div class="flex items-center justify-between gap-4 mb-4"><div><div class="text-xl font-bold text-white">扫描快照 #${x.id}</div><div class="text-xs text-slate-400 mt-1">${x.created_at||''}</div></div><button class="btn btn-g" onclick="useHistorySnapshot(${x.id})">载入到结果页</button></div><div class="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-4"><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">模式</div><div class="text-white font-bold mt-1">${x.mode}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">分组</div><div class="text-white font-bold mt-1">${x.summary?.groups||0}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">项目</div><div class="text-white font-bold mt-1">${x.summary?.items||0}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">建议删除</div><div class="text-rose-300 font-bold mt-1">${x.summary?.delete||0}</div></div></div><div class="space-y-3">${(x.groups||[]).slice(0,20).map(g=>`<div class="p-3 rounded-xl border border-white/5 bg-black/20"><div class="font-bold text-sky-300">${g.title}</div><div class="text-xs text-slate-400 mt-1">共 ${g.summary?.total||0} 项 · 保留 ${g.summary?.keep||0} · 删除 ${g.summary?.delete||0}</div><div class="mt-2 text-[11px] text-slate-500 break-all">${(g.items||[]).slice(0,3).map(i=>i.file?.path||i.path||'').join('<br>')}</div></div>`).join('')}</div>`;
-  } catch(e) {
-    $('history-detail').innerHTML=`<div class="text-rose-400 text-sm">历史详情加载失败：${e.message||e}</div>`;
-  }
+  const r=await fetch(`/api/history/${id}`);
+  const x=await r.json();
+  $('history-detail').innerHTML=`<div class="flex items-center justify-between gap-4 mb-4"><div><div class="text-xl font-bold text-white">扫描快照 #${x.id}</div><div class="text-xs text-slate-400 mt-1">${x.created_at||''}</div></div><button class="btn btn-g" onclick="useHistorySnapshot(${x.id})">载入到结果页</button></div><div class="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-4"><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">模式</div><div class="text-white font-bold mt-1">${x.mode}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">分组</div><div class="text-white font-bold mt-1">${x.summary?.groups||0}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">项目</div><div class="text-white font-bold mt-1">${x.summary?.items||0}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">建议删除</div><div class="text-rose-300 font-bold mt-1">${x.summary?.delete||0}</div></div></div><div class="space-y-3">${(x.groups||[]).slice(0,20).map(g=>`<div class="p-3 rounded-xl border border-white/5 bg-black/20"><div class="font-bold text-sky-300">${g.title}</div><div class="text-xs text-slate-400 mt-1">共 ${g.summary?.total||0} 项 · 保留 ${g.summary?.keep||0} · 删除 ${g.summary?.delete||0}</div><div class="mt-2 text-[11px] text-slate-500 break-all">${(g.items||[]).slice(0,3).map(i=>i.file?.path||i.path||'').join('<br>')}</div></div>`).join('')}</div>`;
 }
 
 async function useHistorySnapshot(id){
-  try {
-    const r=await fetch(`/api/history/${id}`);
-    if(!r.ok) throw new Error(`HTTP ${r.status}`);
-    const x=await r.json();
-    st.snapshot={snapshot_id:x.id,created_at:x.created_at,summary:x.summary||{}};
-    st.d=(x.groups||[]).map(g=>({title:g.title,items:g.items||[],summary:g.summary||{}}));
-    prepareDerivedData();
-    st.s.clear();
-    st.loaded=0;
-    st.loading=false;
-    $('rbox').innerHTML='';
-    renderScanMeta();
-    rt();
-    nav('results');
-    renderMore();
-  } catch(e) {
-    toast(`❌ 载入历史失败: ${e.message||e}`)
-  }
+  const r=await fetch(`/api/history/${id}`);
+  const x=await r.json();
+  st.snapshot={snapshot_id:x.id,created_at:x.created_at,summary:x.summary||{}};
+  st.d=(x.groups||[]).map(g=>({title:g.title,items:g.items||[],summary:g.summary||{}}));
+  prepareDerivedData();
+  st.s.clear();
+  st.loaded=0;
+  st.loading=false;
+  $('rbox').innerHTML='';
+  renderScanMeta();
+  rt();
+  nav('results');
+  renderMore();
 }
 
 function bat(t,a){
@@ -644,53 +616,41 @@ function togG(ids,c){ids.split(',').forEach(id=>{if(c)st.s.add(id);else st.s.del
 }
 
 function jumpToEmby(eid, e) { e.stopPropagation(); if(!appConfig.host){toast("❌ 配置未加载");return} const target=st.sid?`${appConfig.host}/web/index.html#!/item?id=${eid}&serverId=${st.sid}`:`${appConfig.host}/web/index.html#!/item?id=${eid}`; window.open(target, '_blank'); }
-async function del() { const run=async()=>{const ids=Array.from(st.s);if(!ids.length)return;toast('⚡ 正在执行删除...');const resp=await fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});const data=await resp.json().catch(()=>({}));if(!resp.ok||data.status==='error'||data.ok===false){toast(`❌ ${data.message||'删除失败'}`);return}st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0);prepareDerivedData();st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden');toast('✅ 删除任务已下发')}; if(prefConfirmEnabled()) previewBatch('批量删除', run); else run() }
-async function ignoreItems(){ const run=async()=>{const ids=Array.from(st.s); if(!ids.length){toast('❌ 未勾选');return} const resp=await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids: ids, mode: st.m})}); const data=await resp.json().catch(()=>({})); if(!resp.ok||data.status==='error'||data.ok===false){toast(`❌ ${data.message||'忽略失败'}`);return} st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0); prepareDerivedData(); st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden'); toast('✅ 已添加忽略'); }; if(prefConfirmEnabled()) previewBatch('批量忽略', run); else await run() }
-async function refreshItems(){ const run=async()=>{const ids=Array.from(st.s);if(!ids.length){toast('❌ 未选中');return}toast('⏳ 指令下发中...');const r=await fetch('/api/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});const res=await r.json();if(!r.ok||res.status==='error'||res.ok===false){toast(`❌ ${res.message||'请求失败'}`);return}st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size'].includes(st.m)?g.items.length>1:g.items.length>0);prepareDerivedData();st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden');toast('✅ 指令已送达，后台正在热更新...')}; if(prefConfirmEnabled()) previewBatch('批量刷新', run); else await run()}
+async function del() { const run=async()=>{const ids=Array.from(st.s);if(!ids.length)return;st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0);prepareDerivedData();st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden');toast('⚡ 正在执行删除...');await fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})})}; if(prefConfirmEnabled()) previewBatch('批量删除', run); else run() }
+async function ignoreItems(){ const run=async()=>{const ids=Array.from(st.s); if(!ids.length){toast('❌ 未勾选');return} st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0); prepareDerivedData(); st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden'); toast('✅ 已添加忽略'); await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids: ids, mode: st.m})}); }; if(prefConfirmEnabled()) previewBatch('批量忽略', run); else await run() }
+async function refreshItems(){ const run=async()=>{const ids=Array.from(st.s);if(!ids.length){toast('❌ 未选中');return}toast('⏳ 指令下发中...');st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size'].includes(st.m)?g.items.length>1:g.items.length>0);prepareDerivedData();st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden');const r=await fetch('/api/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});const res=await r.json();if(res.status==='ok')toast('✅ 指令已送达，后台正在热更新...');else toast('❌ 请求失败')}; if(prefConfirmEnabled()) previewBatch('批量刷新', run); else await run()}
 async function loadIgnored(){
-    try {
-      st.ignS.clear(); const r=await fetch('/api/ignore');let d=await r.json();
-      if(!Array.isArray(d)){ $('ignore-list').innerHTML=`<div class="text-rose-400 text-center py-4 text-[10px]">${d.message||'黑名单加载失败'}</div>`; return }
-      const kw=(($('ignore-search')?.value)||'').toLowerCase().trim();
-      const mf=(($('ignore-mode-filter')?.value)||'').trim();
-      if(mf)d=d.filter(i=>i.mode===mf);
-      if(kw)d=d.filter(i=>`${i.name||''} ${i.emby_id||''}`.toLowerCase().includes(kw));
-      const modeMap = { "av": "番号", "smart": "洗版", "size": "同大", "duration": "时长", "noposter": "封面", "tiny": "极小", "global": "全局" };
-      $('ignore-list').innerHTML=d.map(i=>`<div class="bg-white/5 p-3 rounded-xl border border-white/5 flex justify-between items-center"><div class="flex items-center gap-3 overflow-hidden min-w-0 flex-1"><input type="checkbox" class="ign-check w-4 h-4 accent-sky-500 cursor-pointer flex-shrink-0" value="${i.id}"><div class="flex flex-col min-w-0"><div class="truncate pr-2 text-xs text-slate-300 font-bold" title="${i.name||i.emby_id}">${i.name||i.emby_id}</div><div class="flex items-center gap-2 mt-1"><span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 font-mono">${modeMap[i.mode] || i.mode}</span><span class="text-[10px] text-slate-600 font-mono truncate">${i.emby_id}</span></div></div></div><button class="btn btn-g py-1 px-3 text-[10px] flex-shrink-0 ml-2" onclick="ignRestoreSingle(${i.id})">恢复</button></div>`).join('') || '<div class="text-slate-500 text-center py-4 text-[10px]">无匹配黑名单</div>'
-    } catch(e) {
-      $('ignore-list').innerHTML=`<div class="text-rose-400 text-center py-4 text-[10px]">黑名单加载失败：${e.message||e}</div>`
-    }
+    st.ignS.clear(); const r=await fetch('/api/ignore');let d=await r.json();
+    const kw=(($('ignore-search')?.value)||'').toLowerCase().trim();
+    const mf=(($('ignore-mode-filter')?.value)||'').trim();
+    if(mf)d=d.filter(i=>i.mode===mf);
+    if(kw)d=d.filter(i=>`${i.name||''} ${i.emby_id||''}`.toLowerCase().includes(kw));
+    const modeMap = { "av": "番号", "smart": "洗版", "size": "同大", "duration": "时长", "noposter": "封面", "tiny": "极小", "global": "全局" };
+    $('ignore-list').innerHTML=d.map(i=>`<div class="bg-white/5 p-3 rounded-xl border border-white/5 flex justify-between items-center"><div class="flex items-center gap-3 overflow-hidden min-w-0 flex-1"><input type="checkbox" class="ign-check w-4 h-4 accent-sky-500 cursor-pointer flex-shrink-0" value="${i.id}"><div class="flex flex-col min-w-0"><div class="truncate pr-2 text-xs text-slate-300 font-bold" title="${i.name||i.emby_id}">${i.name||i.emby_id}</div><div class="flex items-center gap-2 mt-1"><span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 font-mono">${modeMap[i.mode] || i.mode}</span><span class="text-[10px] text-slate-600 font-mono truncate">${i.emby_id}</span></div></div></div><button class="btn btn-g py-1 px-3 text-[10px] flex-shrink-0 ml-2" onclick="ignRestoreSingle(${i.id})">恢复</button></div>`).join('') || '<div class="text-slate-500 text-center py-4 text-[10px]">无匹配黑名单</div>'
 }
-async function ignRestoreSingle(id){const r=await fetch(`/api/ignore/${id}`,{method:'DELETE'});const d=await r.json().catch(()=>({}));if(!r.ok||d.status==='error'||d.ok===false){toast(`❌ ${d.message||'恢复失败'}`);return}toast('✅ 已恢复');loadIgnored()}
+async function ignRestoreSingle(id){await fetch(`/api/ignore/${id}`,{method:'DELETE'});loadIgnored()}
 async function ignRestoreBulk(){
     const ids=Array.from(st.ignS);if(!ids.length){toast("❌ 未勾选");return}
-    const results=await Promise.all(ids.map(id => fetch(`/api/ignore/${id}`,{method:'DELETE'}).then(r=>r.json().catch(()=>({})).then(d=>({ok:r.ok,data:d})))));
-    const failed=results.filter(x=>!x.ok||x.data?.status==='error'||x.data?.ok===false);
-    if(failed.length){toast(`⚠️ 批量恢复部分失败 (${failed.length})`)} else {toast("✅ 批量恢复完成")}
-    st.ignS.clear(); loadIgnored();
+    await Promise.all(ids.map(id => fetch(`/api/ignore/${id}`,{method:'DELETE'})));
+    toast("✅ 批量恢复完成"); st.ignS.clear(); loadIgnored();
 }
 function ignBatch(c){ const checks = document.querySelectorAll('.ign-check'); checks.forEach(x => { x.checked = c; if(c) st.ignS.add(x.value); else st.ignS.delete(x.value); }); if(!c) st.ignS.clear(); }
 document.addEventListener('change', function(e){ if(e.target.classList.contains('ign-check')){ if(e.target.checked) st.ignS.add(e.target.value); else st.ignS.delete(e.target.value); } });
 async function loadTasks(){
-    try {
-      const r=await fetch('/api/tasks'); const data=await r.json(); currentTasks=Array.isArray(data)?data:[];
-      const c=await(await fetch('/api/config')).json();
-      let h = '';
-      if(c.cron_sync) {
-          h = `<div class='p-3 bg-sky-500/10 rounded-xl border border-sky-500/20 mb-2 flex justify-between items-center'>
-              <div class="text-xs text-white">全量同步 (系统同步) <span class="text-[10px] text-slate-500 block font-mono">SYSTEM | ${c.cron_sync}</span></div>
-              <div class="flex gap-2">
-                  <button class="btn btn-p py-1 px-3 text-[10px]" onclick="editSystemSync('${c.cron_sync}')">编辑</button>
-                  <button class="btn btn-d py-1 px-3 text-[10px]" onclick="delSystemSync()">删除</button>
-              </div>
-          </div>`;
-      }
-      let list=currentTasks.map(x=>`<div class='p-3 bg-white/5 rounded-xl border border-white/5 flex justify-between items-center mb-2'><div class="text-xs text-white">${x.name} <span class="text-[10px] text-slate-500 block font-mono">${x.mode.toUpperCase()} | ${x.cron}</span><span class="text-[10px] text-slate-500 block mt-1">上次：${x.last_status||'idle'} · 命中 ${x.last_found||0} · ${x.last_duration_ms||0}ms</span><span class="text-[10px] text-slate-600 block mt-1">${x.last_message||''}</span></div><div class="flex gap-2"><button class="btn btn-g py-1 px-3 text-[10px]" onclick="runTaskNow(${x.id})">立即执行</button><button class="btn btn-p py-1 px-3 text-[10px]" onclick="editTask(${x.id})">编辑</button><button class="btn btn-d py-1 px-3 text-[10px]" onclick="delTask(${x.id})">删除</button></div></div>`).join('');
-      $('task-list').innerHTML=h+list||'<div class="text-slate-500 text-center py-4 text-[10px]">无任务</div>'
-    } catch(e) {
-      $('task-list').innerHTML=`<div class="text-rose-400 text-center py-4 text-[10px]">任务加载失败：${e.message||e}</div>`
+    const r=await fetch('/api/tasks'); currentTasks=await r.json();
+    const c=await(await fetch('/api/config')).json();
+    let h = '';
+    if(c.cron_sync) {
+        h = `<div class='p-3 bg-sky-500/10 rounded-xl border border-sky-500/20 mb-2 flex justify-between items-center'>
+            <div class="text-xs text-white">全量同步 (系统同步) <span class="text-[10px] text-slate-500 block font-mono">SYSTEM | ${c.cron_sync}</span></div>
+            <div class="flex gap-2">
+                <button class="btn btn-p py-1 px-3 text-[10px]" onclick="editSystemSync('${c.cron_sync}')">编辑</button>
+                <button class="btn btn-d py-1 px-3 text-[10px]" onclick="delSystemSync()">删除</button>
+            </div>
+        </div>`;
     }
-}
+    let list=currentTasks.map(x=>`<div class='p-3 bg-white/5 rounded-xl border border-white/5 flex justify-between items-center mb-2'><div class="text-xs text-white">${x.name} <span class="text-[10px] text-slate-500 block font-mono">${x.mode.toUpperCase()} | ${x.cron}</span><span class="text-[10px] text-slate-500 block mt-1">上次：${x.last_status||'idle'} · 命中 ${x.last_found||0} · ${x.last_duration_ms||0}ms</span><span class="text-[10px] text-slate-600 block mt-1">${x.last_message||''}</span></div><div class="flex gap-2"><button class="btn btn-g py-1 px-3 text-[10px]" onclick="runTaskNow(${x.id})">立即执行</button><button class="btn btn-p py-1 px-3 text-[10px]" onclick="editTask(${x.id})">编辑</button><button class="btn btn-d py-1 px-3 text-[10px]" onclick="delTask(${x.id})">删除</button></div></div>`).join('');
+    $('task-list').innerHTML=h+list||'<div class="text-slate-500 text-center py-4 text-[10px]">无任务</div>'}
 function editSystemSync(cron){ $('sync-cron-dash').focus(); $('sync-cron-dash').scrollIntoView({behavior:'smooth'}); toast("请在下方配置区修改全量更新定时"); }
 async function delSystemSync(){ 
     confirmUI("取消系统同步","确定要关闭全量同步定时吗？","🔄", async()=>{
@@ -700,13 +660,13 @@ async function delSystemSync(){
         toast("✅ 系统同步已关闭"); lc(); loadTasks();
     });
 }
-async function delTask(id){const r=await fetch(`/api/tasks/${id}`,{method:'DELETE'});const d=await r.json().catch(()=>({}));if(!r.ok||d.status==='error'||d.ok===false){toast(`❌ ${d.message||'删除任务失败'}`);return}toast('✅ 任务已删除');loadTasks()}
+async function delTask(id){await fetch(`/api/tasks/${id}`,{method:'DELETE'});loadTasks()}
 async function runTaskNow(id){toast('⏳ 任务执行中...'); const r=await fetch(`/api/tasks/${id}/run`,{method:'POST'}); const d=await r.json(); if(d.ok===false||d.status==='error') toast(`❌ ${d.message||'执行失败'}`); else toast(`✅ 已执行：${d.last_message||('命中 '+(d.found||0))}`); await loadTasks()}
 
 function editTask(id){const t=currentTasks.find(x=>x.id===id);if(t){$('m-id').value=t.id;$('m-name').value=t.name;$('m-cron').value=t.cron;$('m-mode').value=t.mode;$('m-libs').value=t.libraries;$('modal').classList.add('open')}}
 function openAddModal(){$('m-id').value='';$('m-name').value='定时任务';$('m-cron').value='0 8 * * *';$('m-mode').value=st.m;$('m-libs').value=Array.from(st.ls).join(',');$('modal').classList.add('open')}
 function closeModal(){$('modal').classList.remove('open')}
-async function submitTask(){const id=$('m-id').value;const b={name:$('m-name').value,cron:$('m-cron').value,mode:$('m-mode').value,libraries:$('m-libs').value,enabled:true};const method=id?'PUT':'POST';const url=id?`/api/tasks/${id}`:'/api/tasks';const r=await fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});const d=await r.json().catch(()=>({}));if(!r.ok||d.status==='error'||d.ok===false){toast(`❌ ${d.message||'保存任务失败'}`);return}closeModal();toast('✅ 任务已保存');loadTasks()}
+async function submitTask(){const id=$('m-id').value;const b={name:$('m-name').value,cron:$('m-cron').value,mode:$('m-mode').value,libraries:$('m-libs').value,enabled:true};const method=id?'PUT':'POST';const url=id?`/api/tasks/${id}`:'/api/tasks';await fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});closeModal();loadTasks()}
 async function savePrefs(){
   const c=await (await fetch('/api/config')).json();
   const payload={
