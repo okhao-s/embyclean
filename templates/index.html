@@ -293,7 +293,6 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
 
  <div class="flex-1 py-2 px-2 space-y-1 overflow-y-auto">
     <div class="nav-item active" onclick="nav('cleaner',this)"><span>清理中心</span></div>
-    <div class="nav-item" onclick="nav('history',this)"><span>历史记录</span></div>
     <div class="nav-item" onclick="nav('logs',this)"><span>日志中心</span></div>
     <div class="nav-item" onclick="nav('settings',this)"><span>系统配置</span></div>
  </div>
@@ -327,11 +326,9 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
    <div class="sticky top-0 bg-[#020617]/95 backdrop-blur-xl z-20 pb-4 border-b border-white/5 mb-6 flex flex-wrap justify-between items-center pt-2 px-2">
     <div class="flex gap-6 items-center flex-shrink-0"><button class="btn btn-g" onclick="nav('cleaner')">⬅ 返回</button>
         <span class="text-slate-400">已展示 <b id="rc-shown" class="text-sky-400 text-xl font-mono">0</b> / 共 <b id="rc-total" class="text-white text-xl font-mono">0</b> 项</span>
-        <span id="scan-snapshot-badge" class="text-[11px] px-3 py-1 rounded-full bg-sky-500/10 text-sky-300 border border-sky-500/20 hidden"></span>
     </div>
     <div id="tb" class="flex flex-wrap gap-2"></div>
    </div>
-   <div id="scan-meta" class="card hidden mb-4"></div>
    <div id="rbox" class="flex flex-col gap-4"></div>
    <div id="load-status">✨ 准备就绪</div>
    
@@ -342,20 +339,7 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
    </div>
   </div>
 
-  <div id="p-history" class="page result-container">
-    <div class="flex justify-between items-center mb-6 gap-4 flex-wrap">
-      <h1 class="text-2xl font-bold text-white">扫描历史</h1>
-      <div class="flex gap-3">
-        <button class="btn btn-g" onclick="loadHistory()">🔄 刷新</button>
-      </div>
-    </div>
-    <div class="grid grid-cols-1 xl:grid-cols-[420px,1fr] gap-6">
-      <div class="card max-h-[72vh] overflow-auto" id="history-list"></div>
-      <div class="card max-h-[72vh] overflow-auto" id="history-detail"><div class="text-slate-500 text-sm">先从左侧选一条扫描历史。</div></div>
-    </div>
-  </div>
-
-  <div id="p-logs" class="page result-container"><div class="flex justify-between items-center mb-6 gap-4 flex-wrap"><h1 class="text-2xl font-bold text-white">系统日志</h1><div class="flex gap-3 flex-wrap"><select id="log-source" class="text-xs p-3" onchange="ll()"><option value="db">结构化日志</option><option value="memory">运行日志</option></select><select id="log-category" class="text-xs p-3" onchange="ll()"><option value="">全部分类</option><option value="system">system</option><option value="scan">scan</option><option value="sync">sync</option><option value="delete">delete</option></select><select id="log-level" class="text-xs p-3" onchange="ll()"><option value="">全部级别</option><option value="info">info</option><option value="warn">warn</option><option value="error">error</option></select><input id="log-keyword" class="text-xs p-3 w-52" placeholder="关键词过滤" oninput="ll()"><button class="btn btn-g" onclick="clearLogs()">🗑️ 清空</button></div></div><div class="card bg-black/50 font-mono h-[70vh] overflow-auto p-8 leading-relaxed text-sm text-slate-300 border-white/5" id="lbox"></div></div>
+  <div id="p-logs" class="page result-container"><div class="flex justify-between items-center mb-6"><h1 class="text-2xl font-bold text-white">系统日志</h1><button class="btn btn-g" onclick="clearLogs()">🗑️ 清空</button></div><div class="card bg-black/50 font-mono h-[70vh] overflow-auto p-8 leading-relaxed text-sm text-slate-300 border-white/5" id="lbox"></div></div>
 
   <div id="p-settings" class="page result-container"><div class="grid grid-cols-1 xl:grid-cols-2 gap-10">
    <div class="card h-fit flex flex-col">
@@ -401,7 +385,7 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
 <div id="batch-preview" class="modal"><div class="modal-box max-w-xl"><div class="text-xl font-bold mb-4 text-white">批量操作预览</div><div id="batch-preview-body" class="text-sm text-slate-300 space-y-2"></div><div class="flex justify-end gap-3 mt-6"><button class="btn btn-g px-5" onclick="closeBatchPreview()">取消</button><button class="btn btn-p px-5" id="batch-preview-confirm">确认执行</button></div></div></div>
 <script>
 const $=id=>document.getElementById(id);
-let appConfig={},st={m:'av',ls:new Set(),d:[],flat:[],p:1,s:new Set(),sid:'',ignS:new Set(),loaded:0,loading:false,snapshot:null,history:[]},PAGE_SIZE=50,currentTasks=[];
+let appConfig={},st={m:'av',ls:new Set(),d:[],flat:[],p:1,s:new Set(),sid:'',ignS:new Set(),loaded:0,loading:false},PAGE_SIZE=50,currentTasks=[];
 const THEMES=['obsidian','frost','terminal','paper'];
 function applyTheme(theme){const t=THEMES.includes(theme)?theme:'obsidian';document.body.setAttribute('data-theme',t);document.querySelectorAll('[data-theme-option]').forEach(el=>el.classList.toggle('active', el.dataset.themeOption===t));localStorage.setItem('embyclean_theme', t)}
 function setTheme(theme){applyTheme(theme);toast(`🎨 已切换到 ${theme}`)}
@@ -413,7 +397,7 @@ function selectedSummary(){const items=selectedItems(); const totalSize=items.re
 function previewBatch(actionLabel, onConfirm){const summary=selectedSummary(); if(!summary.count){toast('❌ 未勾选');return} const body=`<div class="grid grid-cols-2 gap-3"><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">操作</div><div class="text-white font-bold mt-1">${actionLabel}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">选中条目</div><div class="text-white font-bold mt-1">${summary.count}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">涉及分组</div><div class="text-white font-bold mt-1">${summary.groups}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">预计影响体积</div><div class="text-white font-bold mt-1">${bytesHuman(summary.totalSize)}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">推荐删除命中</div><div class="text-white font-bold mt-1">${summary.recommendedDelete}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">推荐保留命中</div><div class="text-white font-bold mt-1">${summary.recommendedKeep}</div></div></div>`; $('batch-preview-body').innerHTML=body; $('batch-preview-confirm').onclick=()=>{closeBatchPreview(); onConfirm()}; $('batch-preview').classList.add('open')}
 function prefConfirmEnabled(){return $('pref-confirm') ? $('pref-confirm').checked : true}
 function chooseRecommended(){const flat=getFlatSlice().slice(0, st.loaded); flat.forEach(i=>{ if(i.recommend_action==='delete') st.s.add(i.emby_id); else st.s.delete(i.emby_id)}); st.loaded=0; $('rbox').innerHTML=''; renderMore(flat.length)}
-window.onload=()=>{applyTheme(localStorage.getItem('embyclean_theme')||'obsidian');poll();gl();lc();loadHistory();setInterval(poll,5000);setInterval(()=>{if($('p-logs').classList.contains('active')) ll()},5000)};
+window.onload=()=>{applyTheme(localStorage.getItem('embyclean_theme')||'obsidian');poll();gl();lc();setInterval(poll,5000);setInterval(()=>{if($('p-logs').classList.contains('active')) ll()},5000)};
 
 /* 🚀 监听滚动事件：无限加载 */
 $('content-area').addEventListener('scroll', () => {
@@ -426,7 +410,7 @@ $('content-area').addEventListener('scroll', () => {
 function toast(msg){const t=document.createElement('div');t.className='toast';t.innerText=msg;$('toast-box').appendChild(t);setTimeout(()=>{t.remove()},3500)}
 function confirmUI(t,d,i,y){$('conf-title').innerText=t;$('conf-desc').innerText=d;$('conf-icon').innerText=i;$('conf-modal').classList.add('open');$('conf-yes').onclick=()=>{y();closeConf()}}
 function closeConf(){$('conf-modal').classList.remove('open')}
-function nav(p,el){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));$('p-'+p).classList.add('active');if(el){document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));el.classList.add('active')} if(p=='settings'){lc();loadIgnored();loadTasks()} if(p=='logs'){ll()} if(p=='history'){loadHistory()}}
+function nav(p,el){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));$('p-'+p).classList.add('active');if(el){document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));el.classList.add('active')} if(p=='settings'){lc();loadIgnored();loadTasks()} if(p=='logs'){ll()}}
 async function poll(){
  try{const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),4000);const resp=await fetch('/api/status',{signal:controller.signal});clearTimeout(timer);const r=await resp.json();
  $('sb-loc').innerText=r.local_cache;$('sb-cln').innerText=r.cleaned_count;$('sb-spc').innerText=(r.saved_space/1e9).toFixed(2)+" GB";
@@ -444,71 +428,27 @@ function mode(m,e){st.m=m;document.querySelectorAll('.mode-btn').forEach(x=>x.cl
 
 async function scan(){
     $('loader').style.display='flex';
-    try {
-      let u=`/api/scan?mode=${st.m}&lib=${Array.from(st.ls).join(',')}&param_s=${$('inp-t').value}&param_d=${$('inp-d').value}`;
-      const r=await fetch(u);
-      const payload=await r.json();
-      st.d=payload.groups||[];
-      st.snapshot=payload.snapshot||null;
-      prepareDerivedData();
-      st.s.clear();
-      st.loaded = 0; 
-      st.loading = false;
-      $('rbox').innerHTML = ''; 
-      renderScanMeta();
-      rt(); 
-      nav('results');
-      renderMore();
-      await loadHistory();
-    } finally {
-      $('loader').style.display='none';
-    }
+    let u=`/api/scan?mode=${st.m}&lib=${Array.from(st.ls).join(',')}&param_s=${$('inp-t').value}&param_d=${$('inp-d').value}`;
+    const r=await fetch(u);
+    st.d=await r.json();
+    prepareDerivedData();
+    st.s.clear();
+    st.loaded = 0; 
+    st.loading = false;
+    $('rbox').innerHTML = ''; 
+    rt(); 
+    nav('results');
+    renderMore(); 
+    $('loader').style.display='none';
 }
 
-function renderScanMeta(){
-  const meta=$('scan-meta');
-  const badge=$('scan-snapshot-badge');
-  if(!st.snapshot){meta.classList.add('hidden'); badge.classList.add('hidden'); badge.innerText=''; return}
-  const s=st.snapshot.summary||{};
-  badge.classList.remove('hidden');
-  badge.innerText=`快照 #${st.snapshot.snapshot_id}`;
-  meta.classList.remove('hidden');
-  meta.innerHTML=`<div class="grid grid-cols-2 xl:grid-cols-5 gap-3">
-    <div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">快照</div><div class="text-white font-bold mt-1">#${st.snapshot.snapshot_id}</div></div>
-    <div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">分组</div><div class="text-white font-bold mt-1">${s.groups||0}</div></div>
-    <div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">项目</div><div class="text-white font-bold mt-1">${s.items||0}</div></div>
-    <div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">推荐保留</div><div class="text-emerald-300 font-bold mt-1">${s.keep||0}</div></div>
-    <div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">推荐删除</div><div class="text-rose-300 font-bold mt-1">${s.delete||0}</div></div>
-  </div><div class="mt-3 text-xs text-slate-400">创建时间：${st.snapshot.created_at||'--'}</div>`
-}
-
-async function loadHistory(){
-  const r=await fetch('/api/history?limit=30');
-  st.history=await r.json();
-  $('history-list').innerHTML=st.history.length?st.history.map(x=>`<div class="p-4 rounded-xl border border-white/5 bg-white/5 mb-3 cursor-pointer hover:bg-white/10" onclick="showHistory(${x.id})"><div class="flex justify-between items-center gap-3"><div class="font-bold text-white">#${x.id} · ${x.mode}</div><div class="text-[10px] text-sky-300">${x.source||'manual'}</div></div><div class="text-xs text-slate-400 mt-2">分组 ${x.summary?.groups||0} · 项目 ${x.summary?.items||0} · 删除 ${x.summary?.delete||0}</div><div class="text-[11px] text-slate-500 mt-2 break-all">${x.created_at||''}</div></div>`).join(''):'<div class="text-slate-500 text-sm">暂无扫描历史。</div>';
-}
-
-async function showHistory(id){
-  const r=await fetch(`/api/history/${id}`);
-  const x=await r.json();
-  $('history-detail').innerHTML=`<div class="flex items-center justify-between gap-4 mb-4"><div><div class="text-xl font-bold text-white">扫描快照 #${x.id}</div><div class="text-xs text-slate-400 mt-1">${x.created_at||''}</div></div><button class="btn btn-g" onclick="useHistorySnapshot(${x.id})">载入到结果页</button></div><div class="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-4"><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">模式</div><div class="text-white font-bold mt-1">${x.mode}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">分组</div><div class="text-white font-bold mt-1">${x.summary?.groups||0}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">项目</div><div class="text-white font-bold mt-1">${x.summary?.items||0}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">建议删除</div><div class="text-rose-300 font-bold mt-1">${x.summary?.delete||0}</div></div></div><div class="space-y-3">${(x.groups||[]).slice(0,20).map(g=>`<div class="p-3 rounded-xl border border-white/5 bg-black/20"><div class="font-bold text-sky-300">${g.title}</div><div class="text-xs text-slate-400 mt-1">共 ${g.summary?.total||0} 项 · 保留 ${g.summary?.keep||0} · 删除 ${g.summary?.delete||0}</div><div class="mt-2 text-[11px] text-slate-500 break-all">${(g.items||[]).slice(0,3).map(i=>i.file?.path||i.path||'').join('<br>')}</div></div>`).join('')}</div>`;
-}
-
-async function useHistorySnapshot(id){
-  const r=await fetch(`/api/history/${id}`);
-  const x=await r.json();
-  st.snapshot={snapshot_id:x.id,created_at:x.created_at,summary:x.summary||{}};
-  st.d=(x.groups||[]).map(g=>({title:g.title,items:g.items||[],summary:g.summary||{}}));
-  prepareDerivedData();
-  st.s.clear();
-  st.loaded=0;
-  st.loading=false;
-  $('rbox').innerHTML='';
-  renderScanMeta();
-  rt();
-  nav('results');
-  renderMore();
-}
+function rt(){
+ let h=`<button class="btn-group-item" onclick="bat('all',true)">全选已展示</button><button class="btn-group-item" onclick="bat('all',false)">全不选</button><button class="btn-group-item" onclick="chooseRecommended()">按推荐选择</button>`;
+ if(st.m=='av')h+=`<button class="btn-group-item" onclick="bat('tag','tag_c')">选 [C]</button><button class="btn-group-item" onclick="bat('tag','tag_uc')">选 [UC]</button><button class="btn-group-item" onclick="bat('tag','tag_raw')">选原版</button>`;
+ if(st.m=='smart'){const resos=[...new Set(st.d.flatMap(g=>g.items.map(i=>i.resolution)))].filter(x=>x>0).sort((a,b)=>b-a);resos.forEach(r=>h+=`<button class="btn-group-item" onclick="bat('reso',${r})">⚡ ${r}P</button>`);}
+ if(st.m=='size')h+=`<button class="btn-group-item" onclick="bat('len','path_long')">最长径</button><button class="btn-group-item" onclick="bat('len','path_short')">最短径</button><button class="btn-group-item" onclick="bat('len','name_long')">最长名</button><button class="btn-group-item" onclick="bat('len','name_short')">最短名</button>`;
+ if(st.m=='duration')h+=`<button class="btn-group-item" onclick="bat('filesize','min')">⚡ 选最小文件</button><button class="btn-group-item" onclick="bat('filesize','max')">⚡ 选最大文件</button>`;
+ $('tb').innerHTML=h}
 
 function bat(t,a){
     const f=getFlatSlice();
@@ -539,7 +479,7 @@ function renderMore(count = PAGE_SIZE) {
     
     slice.forEach((i, idx) => {
         const k=st.s.has(i.emby_id);let img=i.has_poster?`<img src="${appConfig.host}/emby/Items/${i.emby_id}/Images/Primary?maxHeight=150" class="w-16 h-24 object-cover mx-4 rounded-lg flex-shrink-0 shadow-md">`:'';
-        const mediaInfo=i.media||{}; const fileInfo=i.file||{};
+        
         // 🚀 路径显示逻辑优化：同大查重(size) 显示路径对比
         let subT=""; const recBadge=i.recommend_action==='keep'?`<span class="text-[10px] px-2 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/20">推荐保留</span>`:(i.recommend_action==='delete'?`<span class="text-[10px] px-2 py-1 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/20">推荐删除</span>`:''); const recReason=i.recommend_reason?`<div class="text-[11px] text-slate-400 mt-1">${i.recommend_reason}</div>`:'';
         if(st.m=='size' || st.m=='duration'){
@@ -580,7 +520,7 @@ function renderMore(count = PAGE_SIZE) {
         }
         
         // 🚀 路径字体从 10px 提升到 12px (text-[10px] -> text-xs)
-        h+=`<div class="res-item ${k?'checked':''}" onclick="tog(${st.loaded + idx})"><div class="w-8 text-center text-xl flex-shrink-0">${k?'✅':'⬜'}</div>${img}<div class="flex-1 px-4 min-w-0"><div class="font-bold truncate text-white text-base flex items-center gap-2">${i.name} ${tags} ${recBadge}</div><div class="mt-1 break-all text-xs text-slate-400 font-mono leading-tight">${subT}</div><div class='text-[10px] mt-1 text-slate-500 font-mono'><span class="text-sky-300 font-bold mr-1">${(i.size/1e6).toFixed(1)}MB</span> | ${i.duration||0}S | ${i.resolution||0}P</div><div class="grid grid-cols-1 xl:grid-cols-2 gap-2 mt-2 text-[11px]"><div class="bg-white/5 rounded-lg p-2 border border-white/5"><div class="text-slate-500 uppercase tracking-wider mb-1">FILE</div><div class="text-slate-300 break-all">${fileInfo.path||i.path||''}</div></div><div class="bg-white/5 rounded-lg p-2 border border-white/5"><div class="text-slate-500 uppercase tracking-wider mb-1">MEDIA</div><div class="text-slate-300 break-all">标题: ${mediaInfo.title||i.name||''}<br>Emby: ${mediaInfo.emby_id||i.emby_id||''}<br>库: ${mediaInfo.library_id||i.library_id||''}</div></div></div>${recReason}</div>${jI}</div>`
+        h+=`<div class="res-item ${k?'checked':''}" onclick="tog(${st.loaded + idx})"><div class="w-8 text-center text-xl flex-shrink-0">${k?'✅':'⬜'}</div>${img}<div class="flex-1 px-4 min-w-0"><div class="font-bold truncate text-white text-base flex items-center gap-2">${i.name} ${tags}</div><div class="mt-1 break-all text-xs text-slate-400 font-mono leading-tight">${subT}</div><div class='text-[10px] mt-1 text-slate-500 font-mono'><span class="text-sky-300 font-bold mr-1">${(i.size/1e6).toFixed(1)}MB</span> | ${i.duration||0}S</div></div>${jI}</div>`
         
         if (idx === slice.length - 1 || slice[idx+1].groupItemsIds !== i.groupItemsIds) {
              h+=`</div>`; 
@@ -708,6 +648,6 @@ async function save(){
 async function saveSyncDash(){const ok=await save(); if(ok) await loadTasks()}
 async function lc(){const c=await(await fetch('/api/config')).json();if(c.host&&!c.host.startsWith('http'))c.host='http://'+c.host;if(c.host&&c.host.endsWith('/'))c.host=c.host.slice(0,-1);appConfig=c;$('ch').value=c.host;$('cu').value=c.user;$('cw').value=c.webhook;$('sync-cron-dash').value=c.cron_sync; const p=c.prefs||{}; if($('pref-av')) $('pref-av').value=['tag_uc','tag_c','tag_raw'].includes(p.av_keep_priority)?p.av_keep_priority:'tag_uc'; if($('pref-size')) $('pref-size').value=['path_long','path_short','name_long','name_short'].includes(p.size_keep)?p.size_keep:'path_long'; if($('pref-duration')) $('pref-duration').value=['min','max'].includes(p.duration_keep)?p.duration_keep:'min'; if($('pref-smart')) $('pref-smart').value=['reso_max','reso_min'].includes(p.smart_keep)?p.smart_keep:'reso_max'; if($('pref-confirm')) $('pref-confirm').checked=(p.confirm_batch||'true')==='true'}
 async function testWebhook(){try{const resp=await fetch('/api/test_webhook',{method:'POST'}); if(!resp.ok) throw new Error(`HTTP ${resp.status}`); toast('🔔 Webhook 测试已发送')}catch(e){toast(`❌ Webhook 测试失败: ${e.message||e}`)}}
-async function ll(){const source=$('log-source')?.value||'db'; const category=$('log-category')?.value||''; const level=$('log-level')?.value||''; const keyword=encodeURIComponent($('log-keyword')?.value||''); const r=await(await fetch(`/api/logs?source=${source}&category=${category}&level=${level}&keyword=${keyword}&limit=300`)).json(); if(Array.isArray(r) && typeof r[0]==='string'){ $('lbox').innerHTML=r.map(l=>`<div class="log-line border-b border-white/5 py-1 break-all whitespace-pre-wrap">${l}</div>`).join(''); } else { $('lbox').innerHTML=(r||[]).map(l=>`<div class="log-line border-b border-white/5 py-3 break-all whitespace-pre-wrap"><div class="text-[10px] text-slate-500 mb-1">${l.created_at||''} · ${l.category||''} · ${l.level||''}</div><div class="text-sky-300">${l.action||''}</div><div class="text-slate-300 mt-1">${l.detail||''}</div>${l.ref_id?`<div class="text-[10px] text-slate-500 mt-1">ref: ${l.ref_type||''}#${l.ref_id}</div>`:''}</div>`).join('')||'<div class="text-slate-500">暂无日志</div>'; } $('lbox').scrollTop=0}
+async function ll(){const r=await(await fetch('/api/logs')).json();$('lbox').innerHTML=r.map(l=>`<div class="log-line border-b border-white/5 py-1 break-all whitespace-pre-wrap">${l}</div>`).join('');$('lbox').scrollTop=$('lbox').scrollHeight}
 async function clearLogs(){try{const resp=await fetch('/api/logs/clear',{method:'POST'}); if(!resp.ok) throw new Error(`HTTP ${resp.status}`); await ll()}catch(e){toast(`❌ 清空日志失败: ${e.message||e}`)}}
 </script></body></html>

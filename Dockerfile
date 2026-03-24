@@ -11,13 +11,16 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates tzdata \
     && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && echo 'Asia/Shanghai' > /etc/timezone \
+    && groupadd -r app && useradd -r -g app app \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY . .
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data && chown -R app:app /app
+
+USER app
 
 VOLUME ["/app/data"]
 EXPOSE 19898

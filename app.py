@@ -12,7 +12,6 @@ from core.responses import ok, err
 import services.scanner as scanner_service
 from services.scanner import MODE_MAP
 from services.scheduler import cron_matches
-from services.history import persist_snapshot, list_snapshots, get_snapshot_detail, add_action_log, list_action_logs
 
 app = FastAPI()
 init_db()
@@ -32,16 +31,7 @@ class MemoryHandler(logging.Handler):
 logger = logging.getLogger("EmbyCleaner")
 logger.setLevel(logging.INFO); logger.addHandler(logging.StreamHandler())
 mem = MemoryHandler(); logger.addHandler(mem)
-def sys_log(msg: str, category: str = "system", action: str = "log", level: str = "info", ref_type: str = "", ref_id: str = ""):
-    logger.info(msg)
-    try:
-        db = SessionLocal()
-        try:
-            add_action_log(db, level=level, category=category, action=action, detail=msg, ref_type=ref_type, ref_id=ref_id)
-        finally:
-            db.close()
-    except Exception:
-        pass
+def sys_log(msg: str): logger.info(msg)
 
 # --- Webhook ---
 class WebhookBuffer:
@@ -288,8 +278,7 @@ async def st_api():
                 await get_token(db, force=True)
         except Exception as e:
             log_status_once("status_info_error", f"[STATUS] ⚠️ 获取服务状态失败: {e}")
-    last_snapshot = list_snapshots(db, limit=1)
-    res = {"local_cache": db.query(MediaItem).count(), "cleaned_count": get_conf(db, "cleaned_count") or "0", "saved_space": get_conf(db, "saved_space") or "0", "is_syncing": sync_lock.locked(), "sync_lib": current_sync_lib, "sync_state": {"running": sync_lock.locked(), "library": current_sync_lib, "last_log": log_buffer[-1] if log_buffer else "就绪"}, "connected": con, "server_name": sn, "server_id": sid, "server_ver": sv, "user_name": get_conf(db, "user"), "sync_cron": get_conf(db, "cron_sync"), "last_log": log_buffer[-1] if log_buffer else "就绪", "latest_snapshot": last_snapshot[0] if last_snapshot else None, "status_checked_at": int(time.time())}
+    res = {"local_cache": db.query(MediaItem).count(), "cleaned_count": get_conf(db, "cleaned_count") or "0", "saved_space": get_conf(db, "saved_space") or "0", "is_syncing": sync_lock.locked(), "sync_lib": current_sync_lib, "connected": con, "server_name": sn, "server_id": sid, "server_ver": sv, "user_name": get_conf(db, "user"), "sync_cron": get_conf(db, "cron_sync"), "last_log": log_buffer[-1] if log_buffer else "就绪", "status_checked_at": int(time.time())}
     db.close(); return res
 
 @app.post("/api/config")
@@ -391,7 +380,6 @@ async def task_run_now(id: int):
 def scan_api(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0"):
     db = SessionLocal()
     findings = scanner_service.perform_internal_scan(db, mode, lib, param_s, param_d)
-    snapshot_meta = persist_snapshot(db, groups=findings, mode=mode, libraries=lib, params={"param_s": param_s, "param_d": param_d}, source="manual")
     def td(lst):
         rows = []
         for x in lst:
@@ -400,21 +388,6 @@ def scan_api(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0")
                 'display_path': os.path.dirname(x.path) + "/" if x.path else "",
                 'recommend_action': getattr(x, 'recommend_action', ''),
                 'recommend_reason': getattr(x, 'recommend_reason', ''),
-                'media': {
-                    'emby_id': x.emby_id,
-                    'title': x.name,
-                    'library_id': x.library_id,
-                    'has_poster': bool(x.has_poster),
-                    'date_created': x.date_created or '',
-                },
-                'file': {
-                    'path': x.path,
-                    'dirname': os.path.dirname(x.path) if x.path else '',
-                    'basename': os.path.basename(x.path) if x.path else '',
-                    'size': x.size or 0,
-                    'duration': x.duration or 0,
-                    'resolution': x.resolution or 0,
-                }
             })
             rows.append(row)
         return rows
@@ -430,9 +403,8 @@ def scan_api(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0")
                 "total": len(items),
             }
         })
-    add_action_log(db, category="scan", action="scan_complete", detail=f"模式={mode} 库={lib or 'all'} 分组={snapshot_meta['summary']['groups']} 项目={snapshot_meta['summary']['items']}", ref_type="snapshot", ref_id=str(snapshot_meta["snapshot_id"]))
     db.close()
-    return {"groups": res, "snapshot": snapshot_meta}
+    return res
 
 # 🚀 修改：黑名单 API 返回 mode 和 id
 @app.get("/api/ignore")
@@ -512,43 +484,9 @@ async def dele_post(r: DeleteRequest, b: BackgroundTasks):
     b.add_task(background_silent_delete, r.ids, h, t); return ok(status="started", queued=len(r.ids))
 
 @app.get("/api/logs")
-def logs_g(limit: int = 200, category: str = "", level: str = "", keyword: str = "", source: str = "memory"):
-    if source == "db":
-        db = SessionLocal()
-        try:
-            return list_action_logs(db, limit=limit, category=category, level=level, keyword=keyword)
-        finally:
-            db.close()
-    return log_buffer[-min(max(limit, 1), 1000):]
+def logs_g(): return log_buffer
 @app.post("/api/logs/clear")
-def logs_c():
-    global log_buffer
-    log_buffer.clear()
-    db = SessionLocal()
-    try:
-        add_action_log(db, category="system", action="logs_clear", detail="已清空内存日志")
-    finally:
-        db.close()
-    return ok(status="ok")
-
-@app.get("/api/history")
-def history_list(limit: int = 20):
-    db = SessionLocal()
-    try:
-        return list_snapshots(db, limit=limit)
-    finally:
-        db.close()
-
-@app.get("/api/history/{snapshot_id}")
-def history_detail(snapshot_id: int):
-    db = SessionLocal()
-    try:
-        data = get_snapshot_detail(db, snapshot_id)
-        if not data:
-            raise HTTPException(status_code=404, detail="snapshot not found")
-        return data
-    finally:
-        db.close()
+def logs_c(): global log_buffer; log_buffer.clear(); return ok(status="ok")
 
 @app.get("/", response_class=HTMLResponse)
 async def idx_p(r: Request): return templates.TemplateResponse("index.html", {"request": r})
