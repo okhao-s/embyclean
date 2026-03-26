@@ -306,5 +306,4 @@ bash push-dev.sh
 
 ## License
 
-如果你准备开源规范一点，建议补一个 LICENSE 文件。
-当前仓库未声明明确许可证时，默认不要瞎拿去商用分发。
+Released under the [MIT License](LICENSE).
