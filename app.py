@@ -1,5 +1,5 @@
 import os, re, logging, asyncio, httpx, time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.responses import HTMLResponse
@@ -78,12 +78,60 @@ def log_status_once(key: str, message: str):
         last_status_log_at[key] = now
         sys_log(message)
 
+
+def utc_now_ts() -> float:
+    return datetime.now(timezone.utc).timestamp()
+
+
+def invalidate_runtime_state(reset_sync_progress: bool = False):
+    global global_token, current_sync_lib
+    global_token = ""
+    if reset_sync_progress:
+        current_sync_lib = ""
+
+
+def _perform_scan(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0"):
+    db = SessionLocal()
+    try:
+        return scanner_service.perform_internal_scan(db, mode, lib, param_s, param_d)
+    finally:
+        db.close()
+
+
+async def perform_scan_async(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0"):
+    return await asyncio.to_thread(_perform_scan, mode, lib, param_s, param_d)
+
+
+def serialize_findings(findings):
+    res = []
+    for f in findings:
+        items = []
+        for x in f.get("items", []):
+            row = {c.name: getattr(x, c.name) for c in x.__table__.columns}
+            row.update({
+                'display_path': os.path.dirname(x.path) + "/" if x.path else "",
+                'recommend_action': getattr(x, 'recommend_action', ''),
+                'recommend_reason': getattr(x, 'recommend_reason', ''),
+            })
+            items.append(row)
+        res.append({
+            "title": f.get("title", ""),
+            "items": items,
+            "summary": {
+                "keep": sum(1 for i in items if i.get('recommend_action') == 'keep'),
+                "delete": sum(1 for i in items if i.get('recommend_action') == 'delete'),
+                "total": len(items),
+            }
+        })
+    return res
+
 async def get_token(db, force=False):
     global global_token
     if global_token and not force:
         return global_token
     h, u, p = get_conf(db, "host"), get_conf(db, "user"), get_conf(db, "pwd")
     if not h or not u:
+        global_token = ""
         return ""
     try:
         r = await emby_client(db).post(
@@ -95,8 +143,10 @@ async def get_token(db, force=False):
         if r.status_code == 200:
             global_token = r.json().get("AccessToken", "")
             return global_token
+        global_token = ""
         log_status_once("auth_http_error", f"[AUTH] ❌ Emby 登录失败: HTTP {r.status_code}")
     except Exception as e:
+        global_token = ""
         log_status_once("auth_exception", f"[AUTH] ❌ Emby 登录异常: {e}")
     return ""
 
@@ -120,10 +170,13 @@ async def do_sync(trigger="手动"):
         db = SessionLocal()
         try:
             h, t = get_conf(db, "host"), await get_token(db)
-            if not t:
-                sys_log("[SYNC] ❌ 授权失败")
+            if not h or not t:
+                sys_log("[SYNC] ❌ Emby 未配置或授权失败")
                 return False
-            res = await emby_client(db).get(f"{h}/Library/MediaFolders", headers=emby_headers(t))
+            res = await emby_client(db).get(f"{h.rstrip('/')}/Library/MediaFolders", headers=emby_headers(t))
+            if res.status_code != 200:
+                sys_log(f"[SYNC] ❌ 获取媒体库失败: HTTP {res.status_code}")
+                return False
             libs = res.json().get("Items", [])
             db.query(MediaItem).delete(); db.commit()
             tot = 0; seen_ids = set()
@@ -132,7 +185,10 @@ async def do_sync(trigger="手动"):
                 while True:
                     params = {"ParentId": lib_id, "Recursive": "true", "IncludeItemTypes": "Movie,Video,Series", "Fields": "Path,MediaSources,ImageTags,DateCreated", "StartIndex": start_index, "Limit": 1000}
                     try:
-                        res_items = await emby_client(db).get(f"{h}/emby/Items", params=params, headers=emby_headers(t))
+                        res_items = await emby_client(db).get(f"{h.rstrip('/')}/emby/Items", params=params, headers=emby_headers(t))
+                        if res_items.status_code != 200:
+                            sys_log(f"[SYNC] ❌ 拉取媒体项失败 [{lib_name}] start={start_index}: HTTP {res_items.status_code}")
+                            break
                         data = res_items.json(); items = data.get("Items", []); total_count = data.get("TotalRecordCount", 0)
                     except Exception as e:
                         sys_log(f"[SYNC] ❌ 拉取媒体项失败 [{lib_name}] start={start_index}: {e}")
@@ -153,7 +209,6 @@ async def do_sync(trigger="手动"):
                                 d = float(ticks) / 10000000.0
                             if ms.get("MediaStreams"):
                                 w = ms["MediaStreams"][0].get("Width", 0)
-                        base = os.path.splitext(os.path.basename(path))[0]
                         c, uc, u = scanner_service.decorate_media_flags(path, i.get('Name', ''))
                         buf.append(MediaItem(emby_id=i["Id"], name=i.get("Name", ""), path=path, resolution=w, size=s, duration=d, has_poster="Primary" in i.get("ImageTags", {}), library_id=lib_id, date_created=date_created, tag_c=c, tag_uc=uc, tag_u=u))
                     if buf:
@@ -162,6 +217,7 @@ async def do_sync(trigger="手动"):
                     start_index += len(items)
                     if start_index >= total_count:
                         break
+            set_conf(db, "last_sync_ts", str(utc_now_ts()))
             sys_log(f"[SYNC] ✅ 同步完成 (共 {tot} 条)")
             await send_webhook(db, "全量同步", f"入库 {tot} 条。")
             return True
@@ -198,37 +254,49 @@ async def delayed_single_update(ids: List[str], host: str, token: str):
 
 async def scheduler_loop():
     while True:
-        await asyncio.sleep(60)
+        now_ts = utc_now_ts()
+        sleep_for = 60 - (now_ts % 60)
+        if sleep_for <= 0 or sleep_for > 60:
+            sleep_for = 60
+        await asyncio.sleep(sleep_for + 0.2)
         db = SessionLocal()
         try:
             now = datetime.now().replace(second=0, microsecond=0)
+            now_ts = utc_now_ts()
             cs = get_conf(db, "cron_sync")
-            if cs and (time.time() - float(get_conf(db, "last_sync_ts") or "0")) > 60:
+            if cs and (now_ts - float(get_conf(db, "last_sync_ts") or "0")) > 60:
                 if cron_matches(cs, now):
-                    set_conf(db, "last_sync_ts", str(time.time()))
+                    set_conf(db, "last_sync_ts", str(now_ts))
                     asyncio.create_task(do_sync("计划"))
             ts = db.query(AuditTask).filter(AuditTask.enabled == True).all()
             for t in ts:
-                if not cron_matches(t.cron, now):
-                    continue
-                if time.time() - float(t.last_run or "0") < 60:
-                    continue
-                started_at = time.time()
-                t.last_run = str(started_at)
-                db.commit()
-                findings = scanner_service.perform_internal_scan(db, t.mode, t.libraries)
-                count = sum(len(f["items"]) for f in findings) if findings else 0
-                t.last_found = count
-                t.last_duration_ms = int((time.time() - started_at) * 1000)
-                if findings:
-                    t.last_status = "matched"
-                    t.last_message = f"发现 {count} 个待处理项"
+                try:
+                    if not cron_matches(t.cron, now):
+                        continue
+                    if now_ts - float(t.last_run or "0") < 60:
+                        continue
+                    started_at = time.time()
+                    t.last_run = str(now_ts)
                     db.commit()
-                    await send_webhook(db, f"定时任务: {t.name}", f"模式: {MODE_MAP.get(t.mode, t.mode)}\n发现: {count} 个待处理项\n耗时: {t.last_duration_ms}ms")
-                else:
-                    t.last_status = "clean"
-                    t.last_message = "未发现待处理项"
+                    findings = await perform_scan_async(t.mode, t.libraries)
+                    count = sum(len(f["items"]) for f in findings) if findings else 0
+                    t.last_found = count
+                    t.last_duration_ms = int((time.time() - started_at) * 1000)
+                    if findings:
+                        t.last_status = "matched"
+                        t.last_message = f"发现 {count} 个待处理项"
+                        db.commit()
+                        await send_webhook(db, f"定时任务: {t.name}", f"模式: {MODE_MAP.get(t.mode, t.mode)}\n发现: {count} 个待处理项\n耗时: {t.last_duration_ms}ms")
+                    else:
+                        t.last_status = "clean"
+                        t.last_message = "未发现待处理项"
+                        db.commit()
+                except Exception as e:
+                    t.last_status = "error"
+                    t.last_message = str(e)
+                    t.last_duration_ms = 0
                     db.commit()
+                    sys_log(f"[SCHED] ❌ 任务执行失败 [{t.id}:{t.name}]: {e}")
         except Exception as e:
             sys_log(f"[SCHED] ❌ 调度异常: {e}")
         finally:
@@ -285,22 +353,31 @@ async def st_api():
 def cfg_post(c: ConfigRequest):
     db = SessionLocal()
     try:
-        set_conf(db, "host", c.host.rstrip('/'))
-        set_conf(db, "user", c.user)
+        old_host = get_conf(db, "host")
+        old_user = get_conf(db, "user")
+        old_pwd = get_conf(db, "pwd")
+        host = (c.host or "").strip().rstrip('/')
+        user = (c.user or "").strip()
+        webhook = (c.webhook or "").strip()
+        cron_sync = (c.cron_sync or "").strip()
+        set_conf(db, "host", host)
+        set_conf(db, "user", user)
         if c.pwd:
             set_conf(db, "pwd", c.pwd)
-        set_conf(db, "webhook_url", c.webhook)
-        set_conf(db, "cron_sync", c.cron_sync)
+        set_conf(db, "webhook_url", webhook)
+        set_conf(db, "cron_sync", cron_sync)
+        if old_host != host or old_user != user or (c.pwd and old_pwd != c.pwd):
+            invalidate_runtime_state(reset_sync_progress=False)
         prefs = getattr(c, 'prefs', None) or {}
         if prefs:
-            set_conf(db, "pref.av.keep_priority", prefs.get("av_keep_priority", "uc,c,raw"))
-            set_conf(db, "pref.size.keep", prefs.get("size_keep", "max"))
-            set_conf(db, "pref.duration.keep", prefs.get("duration_keep", "best"))
-            set_conf(db, "pref.smart.keep", prefs.get("smart_keep", "best"))
+            set_conf(db, "pref.av.keep_priority", prefs.get("av_keep_priority", "tag_uc"))
+            set_conf(db, "pref.size.keep", prefs.get("size_keep", "path_long"))
+            set_conf(db, "pref.duration.keep", prefs.get("duration_keep", "min"))
+            set_conf(db, "pref.smart.keep", prefs.get("smart_keep", "reso_max"))
             set_conf(db, "pref.batch.confirm", prefs.get("confirm_batch", "true"))
         if get_conf(db, "ssl_verify") == "":
             set_conf(db, "ssl_verify", "true")
-        sys_log(f"[CONFIG] ✅ 配置已保存 host={c.host.rstrip('/')} cron={c.cron_sync}")
+        sys_log(f"[CONFIG] ✅ 配置已保存 host={host} cron={cron_sync}")
         return ok(status="ok")
     except Exception as e:
         sys_log(f"[CONFIG] ❌ 保存失败: {e}")
@@ -317,10 +394,10 @@ def cfg_get():
         "webhook": get_conf(db, "webhook_url"),
         "cron_sync": get_conf(db, "cron_sync"),
         "prefs": {
-            "av_keep_priority": get_conf(db, "pref.av.keep_priority") or "uc,c,raw",
-            "size_keep": get_conf(db, "pref.size.keep") or "max",
-            "duration_keep": get_conf(db, "pref.duration.keep") or "best",
-            "smart_keep": get_conf(db, "pref.smart.keep") or "best",
+            "av_keep_priority": get_conf(db, "pref.av.keep_priority") or "tag_uc",
+            "size_keep": get_conf(db, "pref.size.keep") or "path_long",
+            "duration_keep": get_conf(db, "pref.duration.keep") or "min",
+            "smart_keep": get_conf(db, "pref.smart.keep") or "reso_max",
             "confirm_batch": get_conf(db, "pref.batch.confirm") or "true",
         }
     }
@@ -334,7 +411,7 @@ def task_post(t: TaskReq):
 @app.put("/api/tasks/{tid}")
 def task_put(tid: int, t: TaskReq):
     db = SessionLocal(); x = db.query(AuditTask).filter(AuditTask.id == tid).first()
-    if x: x.name, x.mode, x.cron, x.libraries = t.name, t.mode, t.cron, t.libraries; db.commit()
+    if x: x.name, x.mode, x.cron, x.libraries, x.enabled = t.name, t.mode, t.cron, t.libraries, t.enabled; db.commit()
     db.close(); return ok(status="ok")
 @app.delete("/api/tasks/{id}")
 def task_del(id: int):
@@ -348,9 +425,9 @@ async def task_run_now(id: int):
         if not t:
             return err(status="error", message="任务不存在")
         started_at = time.time()
-        t.last_run = str(started_at)
+        t.last_run = str(utc_now_ts())
         db.commit()
-        findings = scanner_service.perform_internal_scan(db, t.mode, t.libraries)
+        findings = await perform_scan_async(t.mode, t.libraries)
         count = sum(len(f["items"]) for f in findings) if findings else 0
         t.last_found = count
         t.last_duration_ms = int((time.time() - started_at) * 1000)
@@ -377,34 +454,9 @@ async def task_run_now(id: int):
         db.close()
 
 @app.get("/api/scan")
-def scan_api(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0"):
-    db = SessionLocal()
-    findings = scanner_service.perform_internal_scan(db, mode, lib, param_s, param_d)
-    def td(lst):
-        rows = []
-        for x in lst:
-            row = {c.name: getattr(x, c.name) for c in x.__table__.columns}
-            row.update({
-                'display_path': os.path.dirname(x.path) + "/" if x.path else "",
-                'recommend_action': getattr(x, 'recommend_action', ''),
-                'recommend_reason': getattr(x, 'recommend_reason', ''),
-            })
-            rows.append(row)
-        return rows
-    res = []
-    for f in findings:
-        items = td(f["items"])
-        res.append({
-            "title": f["title"],
-            "items": items,
-            "summary": {
-                "keep": sum(1 for i in items if i.get('recommend_action') == 'keep'),
-                "delete": sum(1 for i in items if i.get('recommend_action') == 'delete'),
-                "total": len(items),
-            }
-        })
-    db.close()
-    return res
+async def scan_api(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0"):
+    findings = await perform_scan_async(mode, lib, param_s, param_d)
+    return serialize_findings(findings)
 
 # 🚀 修改：黑名单 API 返回 mode 和 id
 @app.get("/api/ignore")
@@ -466,7 +518,7 @@ async def background_silent_delete(ids, host, token):
         for eid in [x for x in results if x]:
             i = db.query(MediaItem).filter(MediaItem.emby_id == eid).first()
             if i:
-                c += 1; s += i.size; db.delete(i); await wb_buffer.add(i.size, db)
+                c += 1; s += i.size; db.delete(i); await wb_buffer.add(i.size)
         db.commit(); set_conf(db, "cleaned_count", str(int(get_conf(db, "cleaned_count") or 0) + c)); set_conf(db, "saved_space", str(int(get_conf(db, "saved_space") or 0) + s))
         if failed:
             preview = ', '.join([f"{eid}:{reason}" for eid, reason in failed[:5]])

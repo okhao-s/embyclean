@@ -606,7 +606,7 @@ async function runTaskNow(id){toast('⏳ 任务执行中...'); const r=await fet
 function editTask(id){const t=currentTasks.find(x=>x.id===id);if(t){$('m-id').value=t.id;$('m-name').value=t.name;$('m-cron').value=t.cron;$('m-mode').value=t.mode;$('m-libs').value=t.libraries;$('modal').classList.add('open')}}
 function openAddModal(){$('m-id').value='';$('m-name').value='定时任务';$('m-cron').value='0 8 * * *';$('m-mode').value=st.m;$('m-libs').value=Array.from(st.ls).join(',');$('modal').classList.add('open')}
 function closeModal(){$('modal').classList.remove('open')}
-async function submitTask(){const id=$('m-id').value;const b={name:$('m-name').value,cron:$('m-cron').value,mode:$('m-mode').value,libraries:$('m-libs').value,enabled:true};const method=id?'PUT':'POST';const url=id?`/api/tasks/${id}`:'/api/tasks';await fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});closeModal();loadTasks()}
+async function submitTask(){const id=$('m-id').value;const old=currentTasks.find(x=>String(x.id)===String(id));const b={name:$('m-name').value,cron:$('m-cron').value,mode:$('m-mode').value,libraries:$('m-libs').value,enabled:old?!!old.enabled:true};const method=id?'PUT':'POST';const url=id?`/api/tasks/${id}`:'/api/tasks';await fetch(url,{method:method,headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});closeModal();loadTasks()}
 async function savePrefs(){
   const c=await (await fetch('/api/config')).json();
   const payload={
@@ -616,10 +616,10 @@ async function savePrefs(){
     webhook: $('cw')?.value || c.webhook || '',
     cron_sync: $('sync-cron-dash')?.value || c.cron_sync || '',
     prefs:{
-      av_keep_priority:$('pref-av')?.value||'uc,c,raw',
-      size_keep:$('pref-size')?.value||'max',
-      duration_keep:$('pref-duration')?.value||'best',
-      smart_keep:$('pref-smart')?.value||'best',
+      av_keep_priority:$('pref-av')?.value||'tag_uc',
+      size_keep:$('pref-size')?.value||'path_long',
+      duration_keep:$('pref-duration')?.value||'min',
+      smart_keep:$('pref-smart')?.value||'reso_max',
       confirm_batch:$('pref-confirm')?.checked?'true':'false'
     }
   };
@@ -631,7 +631,7 @@ async function savePrefs(){
 
 async function save(){
   try{
-    const payload={host:$('ch').value,user:$('cu').value,pwd:$('cp').value,webhook:$('cw').value,cron_sync:$('sync-cron-dash').value,prefs:{av_keep_priority:$('pref-av')?.value||'uc,c,raw',size_keep:$('pref-size')?.value||'max',duration_keep:$('pref-duration')?.value||'best',smart_keep:$('pref-smart')?.value||'best',confirm_batch:$('pref-confirm')?.checked?'true':'false'}};
+    const payload={host:$('ch').value,user:$('cu').value,pwd:$('cp').value,webhook:$('cw').value,cron_sync:$('sync-cron-dash').value,prefs:{av_keep_priority:$('pref-av')?.value||'tag_uc',size_keep:$('pref-size')?.value||'path_long',duration_keep:$('pref-duration')?.value||'min',smart_keep:$('pref-smart')?.value||'reso_max',confirm_batch:$('pref-confirm')?.checked?'true':'false'}};
     const resp=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data=await resp.json().catch(()=>({}));
