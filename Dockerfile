@@ -8,7 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates tzdata \
+    && apt-get install -y --no-install-recommends curl ca-certificates tzdata gosu \
     && ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && echo 'Asia/Shanghai' > /etc/timezone \
     && groupadd -r app && useradd -r -g app app \
@@ -20,10 +20,10 @@ RUN pip install -r requirements.txt
 COPY . .
 RUN mkdir -p /app/data && chown -R app:app /app
 
-USER app
-
 VOLUME ["/app/data"]
 EXPOSE 19898
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS http://127.0.0.1:19898/api/health || exit 1

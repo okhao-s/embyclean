@@ -1,7 +1,7 @@
 services:
   embycleaner:
     container_name: embyclean
-    image: okhao/emby_cleaner:dev
+    image: okhao/emby_cleaner:latest
     build:
       context: .
     ports:

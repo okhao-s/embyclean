@@ -11,7 +11,7 @@ from core.schemas import DeleteRequest, IgnoreRequest, RefreshRequest, TaskReq, 
 from core.responses import ok, err
 import services.scanner as scanner_service
 from services.scanner import MODE_MAP
-from services.scheduler import cron_matches
+from services.scheduler import cron_matches, is_valid_cron
 
 app = FastAPI()
 init_db()
@@ -100,6 +100,26 @@ def _perform_scan(mode: str, lib: str = "", param_s: str = "100", param_d: str =
 
 async def perform_scan_async(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0"):
     return await asyncio.to_thread(_perform_scan, mode, lib, param_s, param_d)
+
+
+async def execute_audit_task(db, task: AuditTask, trigger: str = "计划"):
+    started_at = time.time()
+    task.last_run = str(utc_now_ts())
+    db.commit()
+    findings = await perform_scan_async(task.mode, task.libraries)
+    count = sum(len(f["items"]) for f in findings) if findings else 0
+    task.last_found = count
+    task.last_duration_ms = int((time.time() - started_at) * 1000)
+    if findings:
+        task.last_status = "matched"
+        task.last_message = f"发现 {count} 个待处理项"
+        db.commit()
+        await send_webhook(db, f"{trigger}任务: {task.name}", f"模式: {MODE_MAP.get(task.mode, task.mode)}\n发现: {count} 个待处理项\n耗时: {task.last_duration_ms}ms")
+    else:
+        task.last_status = "clean"
+        task.last_message = "未发现待处理项"
+        db.commit()
+    return count
 
 
 def serialize_findings(findings):
@@ -271,26 +291,18 @@ async def scheduler_loop():
             ts = db.query(AuditTask).filter(AuditTask.enabled == True).all()
             for t in ts:
                 try:
+                    if not is_valid_cron(t.cron):
+                        t.last_status = "error"
+                        t.last_message = "cron 表达式无效"
+                        t.last_duration_ms = 0
+                        db.commit()
+                        log_status_once(f"task_invalid_cron_{t.id}", f"[SCHED] ⚠️ 跳过无效 cron 任务 [{t.id}:{t.name}] -> {t.cron}")
+                        continue
                     if not cron_matches(t.cron, now):
                         continue
                     if now_ts - float(t.last_run or "0") < 60:
                         continue
-                    started_at = time.time()
-                    t.last_run = str(now_ts)
-                    db.commit()
-                    findings = await perform_scan_async(t.mode, t.libraries)
-                    count = sum(len(f["items"]) for f in findings) if findings else 0
-                    t.last_found = count
-                    t.last_duration_ms = int((time.time() - started_at) * 1000)
-                    if findings:
-                        t.last_status = "matched"
-                        t.last_message = f"发现 {count} 个待处理项"
-                        db.commit()
-                        await send_webhook(db, f"定时任务: {t.name}", f"模式: {MODE_MAP.get(t.mode, t.mode)}\n发现: {count} 个待处理项\n耗时: {t.last_duration_ms}ms")
-                    else:
-                        t.last_status = "clean"
-                        t.last_message = "未发现待处理项"
-                        db.commit()
+                    await execute_audit_task(db, t, "定时")
                 except Exception as e:
                     t.last_status = "error"
                     t.last_message = str(e)
@@ -360,6 +372,8 @@ def cfg_post(c: ConfigRequest):
         user = (c.user or "").strip()
         webhook = (c.webhook or "").strip()
         cron_sync = (c.cron_sync or "").strip()
+        if not is_valid_cron(cron_sync):
+            return err(status="error", message="cron_sync 表达式无效")
         set_conf(db, "host", host)
         set_conf(db, "user", user)
         if c.pwd:
@@ -407,12 +421,28 @@ def cfg_get():
 def tasks_get(): db = SessionLocal(); r = db.query(AuditTask).order_by(AuditTask.id.asc()).all(); db.close(); return r
 @app.post("/api/tasks")
 def task_post(t: TaskReq):
-    db = SessionLocal(); db.add(AuditTask(name=t.name, mode=t.mode, cron=t.cron, libraries=t.libraries, enabled=t.enabled)); db.commit(); db.close(); return {"status": "ok"}
+    db = SessionLocal()
+    try:
+        if not is_valid_cron(t.cron):
+            return err(status="error", message="任务 cron 表达式无效")
+        db.add(AuditTask(name=t.name, mode=t.mode, cron=t.cron, libraries=t.libraries, enabled=t.enabled))
+        db.commit()
+        return {"status": "ok"}
+    finally:
+        db.close()
 @app.put("/api/tasks/{tid}")
 def task_put(tid: int, t: TaskReq):
-    db = SessionLocal(); x = db.query(AuditTask).filter(AuditTask.id == tid).first()
-    if x: x.name, x.mode, x.cron, x.libraries, x.enabled = t.name, t.mode, t.cron, t.libraries, t.enabled; db.commit()
-    db.close(); return ok(status="ok")
+    db = SessionLocal()
+    try:
+        if not is_valid_cron(t.cron):
+            return err(status="error", message="任务 cron 表达式无效")
+        x = db.query(AuditTask).filter(AuditTask.id == tid).first()
+        if x:
+            x.name, x.mode, x.cron, x.libraries, x.enabled = t.name, t.mode, t.cron, t.libraries, t.enabled
+            db.commit()
+        return ok(status="ok")
+    finally:
+        db.close()
 @app.delete("/api/tasks/{id}")
 def task_del(id: int):
     db = SessionLocal(); db.query(AuditTask).filter(AuditTask.id == id).delete(); db.commit(); db.close(); return {"status": "ok"}
@@ -424,22 +454,7 @@ async def task_run_now(id: int):
         t = db.query(AuditTask).filter(AuditTask.id == id).first()
         if not t:
             return err(status="error", message="任务不存在")
-        started_at = time.time()
-        t.last_run = str(utc_now_ts())
-        db.commit()
-        findings = await perform_scan_async(t.mode, t.libraries)
-        count = sum(len(f["items"]) for f in findings) if findings else 0
-        t.last_found = count
-        t.last_duration_ms = int((time.time() - started_at) * 1000)
-        if findings:
-            t.last_status = "matched"
-            t.last_message = f"发现 {count} 个待处理项"
-            db.commit()
-            await send_webhook(db, f"手动任务: {t.name}", f"模式: {MODE_MAP.get(t.mode, t.mode)}\n发现: {count} 个待处理项\n耗时: {t.last_duration_ms}ms")
-        else:
-            t.last_status = "clean"
-            t.last_message = "未发现待处理项"
-            db.commit()
+        count = await execute_audit_task(db, t, "手动")
         return ok(status="ok", found=count, task=t.name, last_status=t.last_status, last_message=t.last_message, last_duration_ms=t.last_duration_ms)
     except Exception as e:
         t = db.query(AuditTask).filter(AuditTask.id == id).first()

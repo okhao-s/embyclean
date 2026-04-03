@@ -1,79 +1,201 @@
 # EmbyCleaner
 
-一个给 Emby/Jellyfin 风格媒体库做“查重、洗版、清理、计划任务”的轻量 Web 工具。
+一个面向 Emby 媒体库的轻量清理面板：
+**先全量同步到本地缓存，再做查重/洗版/缺陷扫描，最后由你确认处理。**
 
-它不是那种花里胡哨的演示玩具，核心思路很直接：
-**先把媒体库索引进本地数据库，再按不同规则找出可疑重复项，最后由你确认处理。**
+它的定位很明确：
+- 适合家庭媒体库、私有整理场景
+- 提供 Web UI、计划任务、Webhook 通知
+- 支持删除、忽略、刷新元数据
+- 不做公网多用户后台，不内建权限系统
 
-> ⚠️ 这玩意会涉及真实删除媒体文件。别把它直接裸奔到公网，更别闭眼乱点批量删除。
+> ⚠️ 会涉及真实删除。先备份，再用。不要直接裸露到公网。
 
 ---
 
-## 功能概览
+## 现在支持什么
 
 ### 扫描模式
 
-- **番号查重**：按 AV 番号归组，适合找同片多版本
-- **智能洗版**：同名资源分组，对比分辨率/体积，保留更优版本
-- **同大查重**：按文件大小归组，快速抓完全重复副本
-- **时长查重**：按播放时长归组，适合不同文件名的同内容资源
-- **缺失封面**：列出没有海报的条目
-- **极小文件**：查找异常小文件、样片、残片之类垃圾
+- **番号查重（av）**
+  - 从名称/路径提取番号后分组
+  - 适合同片多版本整理
+- **智能洗版（smart）**
+  - 按同名资源分组
+  - 结合分辨率、体积、海报状态给出推荐保留项
+- **同大查重（size）**
+  - 按文件大小分组
+  - 适合抓硬重复、副本
+- **时长查重（duration）**
+  - 按时长分组
+  - 适合不同文件名但内容近似相同的资源
+- **缺失封面（noposter）**
+  - 列出没有 Primary 海报的项目
+- **极小文件（tiny）**
+  - 找异常小文件，也可叠加时长阈值
 
-### 其他能力
+### 运行能力
 
-- Web 管理界面
-- 手动全量同步 Emby 库
-- 定时扫描任务（cron）
-- 删除前确认
-- 忽略列表 / 黑名单
+- FastAPI Web 面板
+- Emby 全量同步到本地 SQLite
+- 系统级定时全量同步（cron）
+- 任务级定时扫描（cron）
+- 手动立即执行任务
+- 批量删除 / 批量忽略
 - Webhook 通知
-- 本地 SQLite 缓存，避免每次都全量打 Emby API
+- 健康检查接口
 
 ---
 
-## 技术栈
+## 工作原理
 
-- **Backend**: FastAPI
-- **DB**: SQLite
-- **ORM**: SQLAlchemy
-- **Frontend**: 原生 HTML + JS 模板页
-- **Deploy**: Docker / Docker Compose
+### 1. 全量同步链路
 
----
+全量同步会：
 
-## 目录结构
+1. 用配置里的用户名/密码调用 Emby 登录接口
+2. 获取 AccessToken
+3. 拉取媒体库列表
+4. 遍历媒体项并写入本地 `media_items`
+5. 缓存这些字段：
+   - Emby ID
+   - 名称
+   - 路径
+   - 分辨率
+   - 文件大小
+   - 时长
+   - 海报状态
+   - 所属库 ID
+   - 创建时间
+   - 标签识别结果（`C` / `UC` / `U`）
 
-```text
-.
-├── app.py                 # FastAPI 入口
-├── core/
-│   ├── db.py              # 数据库模型与配置存取
-│   ├── responses.py       # 通用响应封装
-│   └── schemas.py         # 请求模型
-├── services/
-│   ├── scanner.py         # 扫描与推荐逻辑
-│   └── scheduler.py       # cron 匹配逻辑
-├── templates/
-│   └── index.html         # 前端页面
-├── Dockerfile
-├── docker-compose.yml
-└── requirements.txt
+扫描任务默认都基于**本地缓存**执行，不是每次直接全库打 Emby API。
+这样更稳，也更快。
+
+### 2. 调度链
+
+当前代码里有两类定时机制：
+
+#### A. 系统同步定时（`cron_sync`）
+
+- 配在全局配置里
+- 用于定时触发一次**全量同步**
+- 调度循环按分钟对齐检查
+- 同一分钟内有去重保护，避免重复触发
+
+#### B. 审计任务定时（`/api/tasks`）
+
+- 每个任务单独配置 `cron`
+- 到点后执行对应扫描模式
+- 会回填任务状态：
+  - `last_run`
+  - `last_status`
+  - `last_found`
+  - `last_message`
+  - `last_duration_ms`
+- 手动执行和定时执行现在走的是**同一套任务执行链**，状态口径一致
+
+### 3. cron 行为说明
+
+- 使用 5 段标准 cron 表达式（分 时 日 月 周）
+- 调度循环是按分钟粒度跑的，不支持秒级调度
+- 配置保存时会做基础校验
+- 无效 cron 不会执行，任务状态会标记为错误
+
+示例：
+
+```cron
+*/30 * * * *
+0 4 * * *
+15 3 * * 1
 ```
 
 ---
 
-## 运行方式
+## 配置项说明
 
-### 方式一：Docker Compose
+配置保存在 `/app/data/emby.db` 里的 `configs` 表。
+
+### 基础连接配置
+
+- `host`
+  - Emby 地址
+  - 例：`http://192.168.1.10:8096`
+- `user`
+  - Emby 用户名
+- `pwd`
+  - Emby 密码
+- `webhook_url`
+  - 可选，任务通知地址
+- `cron_sync`
+  - 可选，系统全量同步 cron
+- `ssl_verify`
+  - 是否校验证书
+  - 默认 `true`
+  - 关闭后会走不校验证书的 HTTP 客户端
+
+### 推荐策略偏好
+
+- `pref.av.keep_priority`
+  - `tag_uc` / `tag_c` / `tag_raw`
+- `pref.size.keep`
+  - `path_long` / `path_short` / `name_long` / `name_short`
+- `pref.duration.keep`
+  - `min` / `max`
+- `pref.smart.keep`
+  - `reso_max` / `reso_min`
+- `pref.batch.confirm`
+  - `true` / `false`
+
+### 运行态统计
+
+- `last_sync_ts`
+- `cleaned_count`
+- `saved_space`
+
+---
+
+## API 概览
+
+主要接口：
+
+- `GET /api/health`
+  - 健康检查
+- `GET /api/status`
+  - 服务状态、连接状态、同步状态、统计信息
+- `GET /api/config`
+- `POST /api/config`
+- `GET /api/libraries`
+- `POST /api/sync`
+  - 触发一次全量同步
+- `GET /api/scan`
+  - 执行扫描并返回序列化结果
+- `GET /api/tasks`
+- `POST /api/tasks`
+- `PUT /api/tasks/{id}`
+- `DELETE /api/tasks/{id}`
+- `POST /api/tasks/{id}/run`
+  - 立即执行任务
+- `GET /api/ignore`
+- `POST /api/ignore`
+- `DELETE /api/ignore/{row_id}`
+- `POST /api/delete`
+- `POST /api/refresh`
+- `POST /api/test_webhook`
+- `GET /api/logs`
+- `POST /api/logs/clear`
+
+---
+
+## 部署
+
+### Docker Compose
 
 ```yaml
 services:
   embycleaner:
+    image: okhao/emby_cleaner:latest
     container_name: embyclean
-    build:
-      context: .
-    image: okhao/emby_cleaner:dev
     ports:
       - "19898:19898"
     volumes:
@@ -93,18 +215,16 @@ services:
 启动：
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
 打开：
 
 ```text
-http://你的服务器IP:19898
+http://<你的主机IP>:19898
 ```
 
----
-
-### 方式二：本地 Python 运行
+### 本地 Python 运行
 
 ```bash
 python3 -m venv .venv
@@ -115,195 +235,193 @@ uvicorn app:app --host 0.0.0.0 --port 19898
 
 ---
 
-## 首次配置
+## 首次使用建议流程
 
-进入页面后，先填写这些配置：
+1. 打开页面
+2. 填写 Emby 地址、用户名、密码
+3. 可选填写 Webhook 和系统同步 cron
+4. 保存配置
+5. 手动执行一次全量同步
+6. 先跑扫描，确认推荐结果
+7. 再决定是否删除/忽略
+8. 最后再开定时任务
 
-- **Emby Host**：你的 Emby 地址
-  - 例如：`http://192.168.1.10:8096`
-- **User**：Emby 用户名
-- **Password**：Emby 密码
-- **Webhook**：可选，任务通知地址
-- **Sync Cron**：可选，全量同步的 cron 表达式
-
-保存后，程序会：
-
-1. 用用户名密码向 Emby 登录
-2. 获取 AccessToken
-3. 拉取媒体库和条目索引到本地 SQLite
-
-### 配置说明
-
-程序会把配置写入本地数据库（`/app/data/emby.db`），主要字段包括：
-
-- `host`
-- `user`
-- `pwd`
-- `webhook_url`
-- `cron_sync`
-- 一些扫描推荐偏好项
-
-> 注意：当前版本**没有内建鉴权系统**，也不是多用户后台。谁能打开页面，谁就能操作你的媒体库。别把它暴露到公网。
+别一上来就配自动删。
+先看命中结果是不是符合你库里的命名习惯。
 
 ---
 
-## 扫描逻辑说明
+## 删除、忽略、刷新是怎么干的
 
-### 1) 番号查重
+### 删除
 
-从名称或路径里提取番号，按番号分组。
-适合日系资源、多版本整理场景。
+- 删除调用的是 Emby 接口：`DELETE /Items/{id}`
+- 后台并发执行
+- 成功后会同步删本地缓存记录
+- 会累计 `cleaned_count` 和 `saved_space`
+- 删除汇总会延迟聚合后再发 webhook
 
-### 2) 智能洗版
+### 忽略
 
-按媒体名称归组，对比：
+- 忽略是**按扫描模式隔离**的，不是全局一个黑名单
+- 同一个媒体项可以在某种模式里忽略，但在另一种模式继续参与扫描
 
-- 分辨率
-- 体积
-- 海报状态
+### 刷新
 
-用于挑出“更像该保留版本”的条目。
-
-### 3) 同大查重
-
-按文件大小归组。
-同体积文件通常是硬重复、重复刮削或多路径副本。
-
-### 4) 时长查重
-
-按时长分组（保留两位小数）。
-适合不同命名但内容几乎相同的视频。
-
-### 5) 缺失封面
-
-列出没有 `Primary` 海报的项目。
-
-### 6) 极小文件
-
-找小于阈值的文件，也可叠加时长阈值。
-适合清理样片、花絮残留、错误切片。
+- 调用 Emby 的 Refresh 接口
+- 成功后会延迟做一次本地校准，更新封面/时间/大小等字段
 
 ---
 
-## 删除与推荐策略
+## 已知限制
 
-程序不会只会傻删，它会根据偏好给出“推荐保留 / 推荐删除”：
+这块尽量说实话。
 
-- 番号模式：可优先保留 `UC` / `C` / 原版
-- 同大模式：可按路径长短、名称长短等规则决定保留项
-- 时长模式：可选保留最大或最小文件
-- 智能模式：可选偏向最高分辨率或最低分辨率
+1. **没有内建鉴权**
+   - 谁能打开页面，谁就能操作
+   - 不适合直接公网暴露
 
-但说到底，**推荐只是推荐，不是神谕**。批量删之前自己看一眼，别回头怪工具太诚实。
+2. **主要面向 Emby**
+   - 虽然项目风格接近 Emby/Jellyfin 场景
+   - 但当前 API 实现按 Emby 接口写的
+   - Jellyfin 不能保证直接兼容
+
+3. **扫描基于本地缓存，不是实时直连库**
+   - 如果刚改完媒体库，没同步，结果可能旧
+
+4. **推荐规则是启发式，不是绝对正确**
+   - 尤其是智能洗版、番号识别、时长归组
+   - 仍然需要人工确认
+
+5. **定时器是分钟粒度**
+   - 不是秒级任务系统
+
+6. **删除结果受 Emby 后端行为影响**
+   - 如果 Emby 端删除策略、挂载权限、媒体路径有问题，接口可能返回失败
+
+7. **SQLite 适合单实例**
+   - 不建议多实例同时写同一个数据目录
 
 ---
 
-## API 概览
+## 排障口径
 
-部分接口如下：
+### 页面能打开，但状态一直离线
 
-- `GET /api/health`：健康检查
-- `GET /api/status`：状态概览
-- `GET /api/config`：读取配置
-- `POST /api/config`：保存配置
-- `GET /api/libraries`：读取媒体库
-- `POST /api/sync`：触发全量同步
-- `POST /api/scan`：执行扫描
-- `POST /api/delete`：删除条目
-- `POST /api/ignore`：加入忽略列表
-- `POST /api/test_webhook`：测试通知
+优先查：
 
-如果你要反向代理或做外层鉴权，可以基于这些接口接自己的网关。
+- `host` 是否写对
+- 用户名密码是否正确
+- Emby 是否能从当前容器访问到
+- 是否 HTTPS 自签证书问题
+  - 必要时检查 `ssl_verify`
 
----
+### 保存配置报 cron 错误
 
-## 数据与持久化
+说明表达式格式不合法。
+请改成标准 5 段 cron。
 
-默认数据目录：
+### 扫描结果为空
 
-```text
-/app/data
-```
+常见原因：
 
-其中主要是：
+- 还没做全量同步
+- 目标媒体库本来就没有命中当前规则
+- 该模式下项目被忽略过
+- 刚改完库，但本地缓存还没刷新
 
-- `emby.db`
-- `emby.db-shm`
-- `emby.db-wal`
+### 定时任务不执行
 
-这些文件属于**运行期数据**，不应该提交进 Git。
+优先查：
+
+- 任务是否启用
+- `cron` 是否合法
+- 当前时间是否真的命中该分钟
+- `last_run` 是否刚执行过，触发了 60 秒去重保护
+- 查看 `/api/logs`
+
+### 删除失败
+
+优先查：
+
+- Emby 用户权限是否足够
+- Emby 后端是否允许删除
+- 挂载路径是否可写
+- 媒体是否被占用
+
+### Webhook 没收到
+
+优先查：
+
+- `webhook_url` 是否可达
+- 目标端是否接受 JSON：
+  - `title`
+  - `text`
+- 先调用一次 `POST /api/test_webhook`
 
 ---
 
 ## 安全建议
 
-这段很重要，别装瞎：
+最重要的几条：
 
-1. **不要把 19898 端口直接暴露到公网**
-2. 最好放在内网、Tailscale、ZeroTier、VPN 或反向代理鉴权后面
-3. 不要把 `.env`、数据库、token、私钥之类文件提交到仓库
-4. Git remote 不要带明文 token
-5. 如果你已经把 token 发出来或写进远端 URL，**立刻撤销重建**
-
----
-
-## 开发备注
-
-### 构建镜像
-
-```bash
-docker build -t okhao/emby_cleaner:test .
-```
-
-### 推送开发镜像
-
-仓库自带脚本：
-
-```bash
-bash push-dev.sh
-```
-
-脚本会：
-
-1. 构建 `okhao/emby_cleaner:test`
-2. 推送到镜像仓库
+1. **不要直接把 19898 暴露到公网**
+2. 放到内网、VPN、Tailscale、ZeroTier，或者反代鉴权后面
+3. 不要把 `/app/data/emby.db` 提交进仓库
+4. 不要把 token、密码、私钥写进 Git remote、README、compose 示例
+5. 如果你已经泄露凭证，立刻轮换
 
 ---
 
-## 常见问题
+## 项目结构
 
-### 1. 为什么页面能开，但扫描没结果？
+```text
+.
+├── app.py
+├── core/
+│   ├── db.py
+│   ├── responses.py
+│   └── schemas.py
+├── services/
+│   ├── scanner.py
+│   └── scheduler.py
+├── templates/
+│   └── index.html
+├── Dockerfile
+├── docker-compose.yml
+└── requirements.txt
+```
 
-通常是下面几种破事：
+---
 
-- Emby 地址填错
-- 用户名/密码不对
-- Emby API 连不上
-- 还没先做全量同步
-- 目标库里本来就没命中当前扫描规则
+## 构建与发布
 
-### 2. 为什么要本地缓存数据库？
+本地构建：
 
-因为每次都直接全量打 Emby API 很蠢，慢，还容易把服务打烦。
-本地缓存后，扫描速度和交互体验会稳定很多。
+```bash
+docker build -t okhao/emby_cleaner:latest .
+```
 
-### 3. 这东西支持公开访问吗？
+如果你维护 Docker Hub：
 
-不建议。
-当前版本不是为公网多用户安全场景设计的。
+```bash
+docker push okhao/emby_cleaner:latest
+```
+
+GitHub 默认主分支：`main`
 
 ---
 
 ## 免责声明
 
-本项目会对你的媒体库执行查重、忽略、删除等操作。
-虽然有确认与推荐逻辑，但**删除造成的损失由使用者自己承担**。
+这个工具会对你的媒体库执行扫描、忽略、刷新、删除等操作。
+**任何误删、误判、数据损失，责任都在使用者自己。**
 
-换句人话：
-**先备份，后清理。别拿生产库裸测。**
+一句话：
+**先备份，再清理。**
 
 ---
 
 ## License
 
-Released under the [MIT License](LICENSE).
+[MIT](./LICENSE)
