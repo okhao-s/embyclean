@@ -98,8 +98,60 @@ def _perform_scan(mode: str, lib: str = "", param_s: str = "100", param_d: str =
         db.close()
 
 
+def _chunked(seq, size):
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
+
+
+async def prune_missing_media_items(candidate_ids: List[str], trigger: str = "scan") -> int:
+    ids = [str(x).strip() for x in candidate_ids if str(x).strip()]
+    if not ids:
+        return 0
+
+    db = SessionLocal()
+    try:
+        h, t = get_conf(db, "host"), await get_token(db)
+        if not h or not t:
+            return 0
+
+        missing_ids = set()
+        for chunk in _chunked(ids, 200):
+            try:
+                res = await emby_client(db).get(
+                    f"{h.rstrip('/')}/emby/Items",
+                    params={"Ids": ",".join(chunk), "Fields": "Path"},
+                    headers=emby_headers(t),
+                )
+            except Exception as e:
+                sys_log(f"[PRUNE] ⚠️ {trigger} 反查远端存在性失败: {e}")
+                return 0
+
+            if res.status_code != 200:
+                sys_log(f"[PRUNE] ⚠️ {trigger} 反查远端存在性失败: HTTP {res.status_code}")
+                return 0
+
+            remote_ids = {str(x.get("Id")) for x in res.json().get("Items", []) if x.get("Id")}
+            missing_ids.update(set(chunk) - remote_ids)
+
+        if not missing_ids:
+            return 0
+
+        deleted = db.query(MediaItem).filter(MediaItem.emby_id.in_(list(missing_ids))).delete(synchronize_session=False)
+        db.commit()
+        sys_log(f"[PRUNE] 🧹 {trigger} 清掉 {deleted} 条远端已不存在的本地缓存")
+        return deleted
+    finally:
+        db.close()
+
+
 async def perform_scan_async(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0"):
-    return await asyncio.to_thread(_perform_scan, mode, lib, param_s, param_d)
+    findings = await asyncio.to_thread(_perform_scan, mode, lib, param_s, param_d)
+    candidate_ids = [item.emby_id for group in findings for item in group.get("items", []) if getattr(item, "emby_id", "")]
+    if candidate_ids:
+        pruned = await prune_missing_media_items(candidate_ids, trigger=f"scan:{mode}")
+        if pruned > 0:
+            findings = await asyncio.to_thread(_perform_scan, mode, lib, param_s, param_d)
+    return findings
 
 
 async def execute_audit_task(db, task: AuditTask, trigger: str = "计划"):
