@@ -54,7 +54,7 @@ class WebhookBuffer:
 
 wb_buffer = WebhookBuffer()
 
-sync_lock = asyncio.Lock(); global_token = ""; current_sync_lib = ""
+sync_lock = asyncio.Lock(); global_token = ""; current_sync_lib = ""; last_sync_trigger_slot = ""
 DELETE_CONCURRENCY = 8
 STATUS_LOG_INTERVAL = 300
 last_status_log_at = {}
@@ -273,6 +273,7 @@ async def delayed_single_update(ids: List[str], host: str, token: str):
         db.close()
 
 async def scheduler_loop():
+    global last_sync_trigger_slot
     while True:
         now_ts = utc_now_ts()
         sleep_for = 60 - (now_ts % 60)
@@ -284,9 +285,13 @@ async def scheduler_loop():
             now = datetime.now().replace(second=0, microsecond=0)
             now_ts = utc_now_ts()
             cs = get_conf(db, "cron_sync")
-            if cs and (now_ts - float(get_conf(db, "last_sync_ts") or "0")) > 60:
-                if cron_matches(cs, now):
-                    set_conf(db, "last_sync_ts", str(now_ts))
+            current_slot = now.strftime("%Y-%m-%d %H:%M")
+            if cs and cron_matches(cs, now):
+                if sync_lock.locked():
+                    sys_log(f"[SCHED] ⚠️ 命中系统同步 cron，但当前已有同步进行中，跳过本分钟触发 [{current_slot}]")
+                    last_sync_trigger_slot = current_slot
+                elif last_sync_trigger_slot != current_slot:
+                    last_sync_trigger_slot = current_slot
                     asyncio.create_task(do_sync("计划"))
             ts = db.query(AuditTask).filter(AuditTask.enabled == True).all()
             for t in ts:
