@@ -42,7 +42,8 @@ def _sort_grouped_by_created_desc(grouped):
     return grouped
 
 def _dir_key(path: str):
-    normalized = os.path.normpath(path or '')
+    raw = (path or '').replace('\\', '/')
+    normalized = os.path.normpath(raw)
     return os.path.dirname(normalized)
 
 
