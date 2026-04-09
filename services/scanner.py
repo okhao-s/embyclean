@@ -44,7 +44,7 @@ def _dir_key(path: str):
     normalized = os.path.normpath(path or '')
     return os.path.dirname(normalized)
 
-def _group_duration_duplicates(items, threshold_seconds=4.0):
+def _group_duration_duplicates(items, threshold_seconds=1.0):
     by_dir = {}
     for item in items:
         dir_key = _dir_key(getattr(item, 'path', ''))
@@ -103,7 +103,7 @@ def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0"):
         grouped = [{"title": f"{k/1e6:.1f} MB", "items": v} for k, v in grp.items()]
     elif mode == "duration":
         all_items = q.filter(MediaItem.duration > 0.1).all()
-        grouped = _group_duration_duplicates(all_items, threshold_seconds=4.0)
+        grouped = _group_duration_duplicates(all_items, threshold_seconds=1.0)
     elif mode == "smart":
         sub = db.query(MediaItem.name).group_by(MediaItem.name).having(func.count(MediaItem.id) > 1)
         rows = q.filter(MediaItem.name.in_(sub)).all(); grp = {}
