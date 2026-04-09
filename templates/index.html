@@ -230,7 +230,9 @@ input { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border
 .path-base { color: #64748b; font-family: monospace; font-size: 12px; } /* 加大字号 */
 .path-diff { color: #fb923c; font-weight: bold; font-family: monospace; font-size: 12px; background: rgba(251, 146, 60, 0.15); padding: 2px 4px; border-radius: 4px; margin-left: 4px; border: 1px solid rgba(251, 146, 60, 0.2); }
 .duration-top-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-top: 6px; }
-.duration-path-block { min-width: 0; flex: 1; }
+.duration-top-meta { min-width: 0; flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.duration-time-chip { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 999px; font-size: 10px; line-height: 1; font-weight: 800; letter-spacing: .02em; color: #7dd3fc; background: rgba(14, 165, 233, 0.14); border: 1px solid rgba(56, 189, 248, 0.28); box-shadow: 0 0 0 1px rgba(255,255,255,0.03) inset; }
+.duration-path-block { min-width: 0; flex: 1 1 320px; }
 .duration-ignore-btn {
     display: inline-flex;
     align-items: center;
@@ -240,13 +242,13 @@ input { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border
     line-height: 1;
     font-weight: 800;
     color: #fff;
-    background: linear-gradient(135deg, rgba(249, 115, 22, 0.95), rgba(234, 88, 12, 0.95));
-    border: 1px solid rgba(251, 146, 60, 0.7);
-    box-shadow: 0 10px 24px -14px rgba(249, 115, 22, 0.95), 0 0 0 1px rgba(255,255,255,0.06) inset;
+    background: linear-gradient(135deg, rgba(249, 115, 22, 0.98), rgba(234, 88, 12, 0.98));
+    border: 1px solid rgba(251, 146, 60, 0.78);
+    box-shadow: 0 10px 24px -14px rgba(249, 115, 22, 0.95), 0 0 0 1px rgba(255,255,255,0.08) inset;
 }
 .duration-ignore-btn:hover {
     transform: translateY(-1px);
-    box-shadow: 0 14px 28px -14px rgba(249, 115, 22, 1), 0 0 0 1px rgba(255,255,255,0.1) inset;
+    box-shadow: 0 14px 28px -14px rgba(249, 115, 22, 1), 0 0 0 1px rgba(255,255,255,0.12) inset;
 }
 .duration-ignore-btn:focus-visible {
     outline: 2px solid rgba(251, 191, 36, 0.9);
@@ -254,6 +256,8 @@ input { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border
 }
 @media (max-width: 640px) {
     .duration-top-row { flex-direction: column; align-items: stretch; }
+    .duration-top-meta { width: 100%; }
+    .duration-path-block { flex-basis: 100%; }
     .duration-ignore-btn { align-self: flex-start; }
 }
 
@@ -546,14 +550,17 @@ function renderMore(count = PAGE_SIZE) {
             }
         }
         
-        // duration 模式把忽略按钮挪到顶部路径区，保持直接忽略
+        // duration 模式把忽略按钮挪到顶部时间/路径区，保持直接忽略
         const durationIgnoreBtn = st.m === 'duration'
-            ? `<button class="btn btn-o duration-ignore-btn flex-shrink-0" onclick="ignoreDurationItemDirect('${i.emby_id}', event)">🚫 忽略</button>`
+            ? `<button type="button" class="btn btn-o duration-ignore-btn flex-shrink-0" onclick="ignoreDurationItemDirect('${i.emby_id}', event)">🚫 忽略</button>`
+            : '';
+        const durationMeta = st.m === 'duration'
+            ? `<div class="duration-top-meta"><span class="duration-time-chip">⏱️ ${i.duration||0}S</span><div class="duration-path-block break-all text-xs text-slate-400 font-mono leading-tight">${subT}</div></div>`
             : '';
         const pathRow = st.m === 'duration'
-            ? `<div class="duration-top-row"><div class="duration-path-block break-all text-xs text-slate-400 font-mono leading-tight">${subT}</div>${durationIgnoreBtn}</div>`
+            ? `<div class="duration-top-row">${durationMeta}${durationIgnoreBtn}</div>`
             : `<div class="mt-1 break-all text-xs text-slate-400 font-mono leading-tight">${subT}</div>`;
-        h+=`<div class="res-item ${k?'checked':''}" onclick="tog(${st.loaded + idx})"><div class="w-8 text-center text-xl flex-shrink-0">${k?'✅':'⬜'}</div>${img}<div class="flex-1 px-4 min-w-0"><div class="font-bold truncate text-white text-base flex items-center gap-2">${i.name} ${tags}</div>${pathRow}<div class='text-[10px] mt-1 text-slate-500 font-mono'><span class="text-sky-300 font-bold mr-1">${(i.size/1e6).toFixed(1)}MB</span> | ${i.duration||0}S</div></div>${jI}</div>`
+        h+=`<div class="res-item ${k?'checked':''}" onclick="tog(${st.loaded + idx})"><div class="w-8 text-center text-xl flex-shrink-0">${k?'✅':'⬜'}</div>${img}<div class="flex-1 px-4 min-w-0"><div class="font-bold truncate text-white text-base flex items-center gap-2">${i.name} ${tags}</div>${pathRow}<div class='text-[10px] mt-1 text-slate-500 font-mono'><span class="text-sky-300 font-bold mr-1">${(i.size/1e6).toFixed(1)}MB</span></div></div>${jI}</div>`
         
         if (idx === slice.length - 1 || slice[idx+1].groupItemsIds !== i.groupItemsIds) {
              h+=`</div>`; 
