@@ -48,18 +48,31 @@ def _dir_key(path: str):
     return os.path.dirname(normalized)
 
 
-def _duration_group_key(duration):
-    value = Decimal(str(duration or 0))
-    return value.quantize(Decimal('0.1'), rounding=ROUND_HALF_UP)
-
-
-def _format_duration_group_key(duration_key: Decimal):
-    return format(duration_key, '.1f')
-
-
 def _normalize_duration_scope(scope: str):
     value = str(scope or 'dir').strip().lower()
     return 'library' if value == 'library' else 'dir'
+
+
+def _normalize_duration_precision(precision: str):
+    value = str(precision or 'second').strip().lower()
+    return 'centisecond' if value in {'centisecond', '2dp', 'two-decimals', 'decimal2'} else 'second'
+
+
+def _duration_precision_label(precision: str):
+    return '两位小数' if _normalize_duration_precision(precision) == 'centisecond' else '整秒'
+
+
+def _duration_quantize_pattern(precision: str):
+    return Decimal('0.01') if _normalize_duration_precision(precision) == 'centisecond' else Decimal('1')
+
+
+def _duration_group_key(duration, precision: str = 'second'):
+    value = Decimal(str(duration or 0))
+    return value.quantize(_duration_quantize_pattern(precision), rounding=ROUND_HALF_UP)
+
+
+def _format_duration_group_key(duration_key: Decimal, precision: str = 'second'):
+    return format(duration_key, '.2f') if _normalize_duration_precision(precision) == 'centisecond' else format(duration_key, '.0f')
 
 
 def _duration_scope_label(scope: str):
@@ -80,23 +93,26 @@ def _duration_bucket_title(bucket_key: str, scope: str):
     return f"📁 {bucket_key or '/'}"
 
 
-def _duration_group_signature(bucket_key: str, duration_key: Decimal, items, scope: str):
+def _duration_group_signature(bucket_key: str, duration_key: Decimal, items, scope: str, precision: str = 'second'):
     scope = _normalize_duration_scope(scope)
+    precision = _normalize_duration_precision(precision)
     member_ids = sorted(str(getattr(item, 'emby_id', '') or '') for item in items if getattr(item, 'emby_id', ''))
     payload = {
-        'scope': 'duration-group-v2',
+        'scope': 'duration-group-v3',
         'duration_scope': scope,
+        'duration_precision': precision,
         'bucket_key': bucket_key or ('/' if scope == 'dir' else 'library:_unknown'),
-        'duration_key': _format_duration_group_key(duration_key),
+        'duration_key': _format_duration_group_key(duration_key, precision),
         'member_ids': member_ids,
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     digest = hashlib.sha1(encoded.encode('utf-8')).hexdigest()
-    return f"duration-group-v2:{digest}"
+    return f"duration-group-v3:{digest}"
 
 
-def _group_duration_duplicates(items, ignored_group_keys=None, scope: str = 'dir'):
+def _group_duration_duplicates(items, ignored_group_keys=None, scope: str = 'dir', precision: str = 'second'):
     scope = _normalize_duration_scope(scope)
+    precision = _normalize_duration_precision(precision)
     ignored_group_keys = set(ignored_group_keys or [])
     grouped_items = {}
     for item in items:
@@ -108,45 +124,51 @@ def _group_duration_duplicates(items, ignored_group_keys=None, scope: str = 'dir
         by_duration = {}
         for item in bucket_items:
             duration = getattr(item, 'duration', 0) or 0
-            duration_key = _duration_group_key(duration)
+            duration_key = _duration_group_key(duration, precision)
             by_duration.setdefault(duration_key, []).append(item)
 
         bucket_title = _duration_bucket_title(bucket_key, scope)
         for duration_key, duration_items in by_duration.items():
             if len(duration_items) > 1:
-                group_key = _duration_group_signature(bucket_key, duration_key, duration_items, scope)
+                group_key = _duration_group_signature(bucket_key, duration_key, duration_items, scope, precision)
                 if group_key in ignored_group_keys:
                     continue
                 grouped.append({
-                    "title": f"⏱️ {_format_duration_group_key(duration_key)} 秒 · {bucket_title}",
+                    "title": f"⏱️ {_format_duration_group_key(duration_key, precision)} 秒 · {bucket_title}",
                     "items": duration_items,
                     "group_key": group_key,
                     "ignore_scope": "group",
                     "group_meta": {
                         "duration_scope": scope,
                         "duration_scope_label": _duration_scope_label(scope),
+                        "duration_precision": precision,
+                        "duration_precision_label": _duration_precision_label(precision),
                         "bucket_key": bucket_key,
                         "bucket_title": bucket_title,
                         "dir_key": bucket_key if scope == 'dir' else '',
                         "library_id": (bucket_key.split(':', 1)[1] if scope == 'library' and bucket_key.startswith('library:') else ''),
-                        "duration_key": _format_duration_group_key(duration_key),
+                        "duration_key": _format_duration_group_key(duration_key, precision),
                         "member_count": len(duration_items),
                     }
                 })
     return grouped
 
 
-def _duration_candidate_duration_keys_query(db, lib_ids=None):
-    duration_key_expr = func.round(MediaItem.duration * 10, 0) / 10.0
+def _duration_candidate_duration_keys_query(db, precision: str = 'second', lib_ids=None):
+    precision = _normalize_duration_precision(precision)
+    multiplier = 100.0 if precision == 'centisecond' else 1.0
+    duration_key_expr = func.round(MediaItem.duration * multiplier, 0) / multiplier
     q = db.query(duration_key_expr.label('duration_key')).filter(MediaItem.duration > 0.1)
     if lib_ids:
         q = q.filter(MediaItem.library_id.in_(lib_ids))
     return q.group_by(duration_key_expr).having(func.count(MediaItem.id) > 1)
 
 
-def _duration_candidate_items_query(db, ignored_emby_ids, lib_ids=None):
-    candidate_duration_keys = _duration_candidate_duration_keys_query(db, lib_ids).subquery()
-    duration_key_expr = func.round(MediaItem.duration * 10, 0) / 10.0
+def _duration_candidate_items_query(db, ignored_emby_ids, precision: str = 'second', lib_ids=None):
+    precision = _normalize_duration_precision(precision)
+    candidate_duration_keys = _duration_candidate_duration_keys_query(db, precision, lib_ids).subquery()
+    multiplier = 100.0 if precision == 'centisecond' else 1.0
+    duration_key_expr = func.round(MediaItem.duration * multiplier, 0) / multiplier
     q = db.query(MediaItem).join(
         candidate_duration_keys,
         candidate_duration_keys.c.duration_key == duration_key_expr
@@ -157,7 +179,7 @@ def _duration_candidate_items_query(db, ignored_emby_ids, lib_ids=None):
         q = q.filter(MediaItem.library_id.in_(lib_ids))
     return q.filter(MediaItem.duration > 0.1)
 
-def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0", duration_scope="dir"):
+def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0", duration_scope="dir", duration_precision="second"):
     lib_ids = [x for x in lib_str.split(',') if x] if lib_str else []
     ignored = [x.emby_id for x in db.query(IgnoredItem.emby_id).filter(IgnoredItem.mode == mode).all()]
     q = db.query(MediaItem)
@@ -183,13 +205,14 @@ def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0", dura
         grouped = [{"title": f"{k/1e6:.1f} MB", "items": v} for k, v in grp.items()]
     elif mode == "duration":
         duration_scope = _normalize_duration_scope(duration_scope)
+        duration_precision = _normalize_duration_precision(duration_precision)
         ignored_group_keys = [
             x.scope_key for x in db.query(IgnoredItem.scope_key)
             .filter(IgnoredItem.mode == mode, IgnoredItem.scope_type == 'group', IgnoredItem.scope_key != '')
             .all()
         ]
-        rows = _duration_candidate_items_query(db, ignored, lib_ids).all()
-        grouped = _group_duration_duplicates(rows, ignored_group_keys, duration_scope)
+        rows = _duration_candidate_items_query(db, ignored, duration_precision, lib_ids).all()
+        grouped = _group_duration_duplicates(rows, ignored_group_keys, duration_scope, duration_precision)
     elif mode == "smart":
         sub = db.query(MediaItem.name).group_by(MediaItem.name).having(func.count(MediaItem.id) > 1)
         rows = q.filter(MediaItem.name.in_(sub)).all(); grp = {}

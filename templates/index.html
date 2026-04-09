@@ -369,11 +369,16 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
     <div id="opt-t" class="hidden flex justify-center mb-8 items-center gap-4 text-slate-400 font-bold bg-black/20 p-4 rounded-xl border border-white/5 mx-auto w-fit">
       大小 < <input type="number" id="inp-t" value="100" class="w-24 text-center text-xl text-sky-400 font-mono"> MB &nbsp;&nbsp;|&nbsp;&nbsp; 时长 < <input type="number" id="inp-d" value="0" class="w-24 text-center text-xl text-sky-400 font-mono"> 秒
     </div>
-    <div id="opt-duration-scope" class="hidden flex justify-center mb-8 items-center gap-3 text-slate-300 font-bold bg-black/20 p-4 rounded-xl border border-white/5 mx-auto w-fit">
+    <div id="opt-duration-scope" class="hidden flex flex-wrap justify-center mb-8 items-center gap-3 text-slate-300 font-bold bg-black/20 p-4 rounded-xl border border-white/5 mx-auto w-fit">
       <span class="text-xs uppercase tracking-wider text-slate-400">对比范围</span>
       <select id="inp-duration-scope" class="text-xs p-3" onchange="setDurationScope(this.value)">
         <option value="dir">同目录</option>
         <option value="library">同库</option>
+      </select>
+      <span class="text-xs uppercase tracking-wider text-slate-400">时长精度</span>
+      <select id="inp-duration-precision" class="text-xs p-3" onchange="setDurationPrecision(this.value)">
+        <option value="second">整秒</option>
+        <option value="centisecond">两位小数</option>
       </select>
     </div>
     <div class="flex justify-center gap-6"><button class="btn btn-p px-16 py-6 text-2xl shadow-2xl shadow-sky-500/20" onclick="scan()">🔍 开始扫描</button><button class="btn btn-g px-10 py-6 text-xl border-dashed" onclick="openAddModal()">➕ 添加计划</button></div>
@@ -446,7 +451,7 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
 <div id="batch-preview" class="modal"><div class="modal-box max-w-xl"><div class="text-xl font-bold mb-4 text-white">批量操作预览</div><div id="batch-preview-body" class="text-sm text-slate-300 space-y-2"></div><div class="flex justify-end gap-3 mt-6"><button class="btn btn-g px-5" onclick="closeBatchPreview()">取消</button><button class="btn btn-p px-5" id="batch-preview-confirm">确认执行</button></div></div></div>
 <script>
 const $=id=>document.getElementById(id);
-let appConfig={},st={m:'av',ls:new Set(),d:[],flat:[],p:1,s:new Set(),sid:'',ignS:new Set(),loaded:0,loading:false,scanSeq:0,scanCtrl:null,scanBusy:false,scanBtnText:'',durationScope:'dir'},PAGE_SIZE=50,currentTasks=[];
+let appConfig={},st={m:'av',ls:new Set(),d:[],flat:[],p:1,s:new Set(),sid:'',ignS:new Set(),loaded:0,loading:false,scanSeq:0,scanCtrl:null,scanBusy:false,scanBtnText:'',durationScope:'dir',durationPrecision:'second'},PAGE_SIZE=50,currentTasks=[];
 const SCAN_BTN_SELECTOR="button[onclick=\"scan()\"]";
 const THEMES=['obsidian','frost','terminal','paper'];
 function applyTheme(theme){const t=THEMES.includes(theme)?theme:'obsidian';document.body.setAttribute('data-theme',t);document.querySelectorAll('[data-theme-option]').forEach(el=>el.classList.toggle('active', el.dataset.themeOption===t));localStorage.setItem('embyclean_theme', t)}
@@ -532,6 +537,7 @@ async function gl(){const r=await fetch('/api/libraries');const d=await r.json()
  $('libs').innerHTML=d.map(l=>`<div class="lib-card" onclick="tl(this,'${l.Id}')"><img src="${l.ImageTags?.Primary?c.host+'/emby/Items/'+l.Id+'/Images/Primary?maxHeight=300':''}"><div class="lib-name">${l.Name}</div></div>`).join('')}
 function tl(e,i){if(st.ls.has(i)){st.ls.delete(i);e.classList.remove('selected')}else{st.ls.add(i);e.classList.add('selected')}}
 function setDurationScope(v){st.durationScope=(v==='library'?'library':'dir'); if($('inp-duration-scope')) $('inp-duration-scope').value=st.durationScope}
+function setDurationPrecision(v){st.durationPrecision=(v==='centisecond'?'centisecond':'second'); if($('inp-duration-precision')) $('inp-duration-precision').value=st.durationPrecision}
 function mode(m,e){st.m=m;document.querySelectorAll('.mode-btn').forEach(x=>x.classList.remove('active'));if(e)e.classList.add('active');if(m=='tiny')$('opt-t').classList.remove('hidden');else $('opt-t').classList.add('hidden'); if(m=='duration')$('opt-duration-scope').classList.remove('hidden'); else $('opt-duration-scope').classList.add('hidden')}
 
 async function scan(){
@@ -546,7 +552,7 @@ async function scan(){
     setScanBusy(true);
     $('loader').style.display='flex';
     try{
-        let u=`/api/scan?mode=${st.m}&lib=${Array.from(st.ls).join(',')}&param_s=${$('inp-t').value}&param_d=${$('inp-d').value}&duration_scope=${encodeURIComponent(st.durationScope||'dir')}`;
+        let u=`/api/scan?mode=${st.m}&lib=${Array.from(st.ls).join(',')}&param_s=${$('inp-t').value}&param_d=${$('inp-d').value}&duration_scope=${encodeURIComponent(st.durationScope||'dir')}&duration_precision=${encodeURIComponent(st.durationPrecision||'second')}`;
         const r=await fetch(u,{signal:controller.signal});
         if(!r.ok) throw new Error(`HTTP ${r.status}`);
         const data=await r.json();
@@ -659,8 +665,9 @@ function renderMore(count = PAGE_SIZE) {
             ? `<div class="duration-actions"><button type="button" class="btn btn-d duration-delete-btn" onclick="deleteDurationItemDirect('${i.emby_id}', event)">🗑️ 删除</button><button type="button" class="btn btn-o duration-ignore-btn" onclick="ignoreDurationItemDirect('${i.emby_id}', event)">🚫 忽略</button></div>`
             : '';
         const durationScopeChip = st.m === 'duration' ? `<span class="duration-time-chip">${i.groupMeta?.duration_scope_label||'同目录'}</span>` : '';
+        const durationPrecisionChip = st.m === 'duration' ? `<span class="duration-time-chip">${i.groupMeta?.duration_precision_label||'整秒'}</span>` : '';
         const durationMeta = st.m === 'duration'
-            ? `<div class="duration-top-meta"><span class="duration-time-chip">⏱️ ${i.duration||0}S</span>${durationScopeChip}<div class="duration-path-block break-all text-xs text-slate-400 font-mono leading-tight">${subT}</div></div>`
+            ? `<div class="duration-top-meta"><span class="duration-time-chip">⏱️ ${i.groupMeta?.duration_key||i.duration||0} 秒</span>${durationScopeChip}${durationPrecisionChip}<div class="duration-path-block break-all text-xs text-slate-400 font-mono leading-tight">${subT}</div></div>`
             : '';
         const pathRow = st.m === 'duration'
             ? `<div class="duration-top-row">${durationMeta}${durationActions}</div>`
@@ -836,6 +843,7 @@ async function savePrefs(){
       size_keep:$('pref-size')?.value||'path_long',
       duration_keep:$('pref-duration')?.value||'min',
       duration_scope:st.durationScope||'dir',
+      duration_precision:st.durationPrecision||'second',
       smart_keep:$('pref-smart')?.value||'reso_max',
       confirm_batch:$('pref-confirm')?.checked?'true':'false'
     }
@@ -848,7 +856,7 @@ async function savePrefs(){
 
 async function save(){
   try{
-    const payload={host:$('ch').value,user:$('cu').value,pwd:$('cp').value,webhook:$('cw').value,cron_sync:$('sync-cron-dash').value,prefs:{av_keep_priority:$('pref-av')?.value||'tag_uc',size_keep:$('pref-size')?.value||'path_long',duration_keep:$('pref-duration')?.value||'min',duration_scope:st.durationScope||'dir',smart_keep:$('pref-smart')?.value||'reso_max',confirm_batch:$('pref-confirm')?.checked?'true':'false'}};
+    const payload={host:$('ch').value,user:$('cu').value,pwd:$('cp').value,webhook:$('cw').value,cron_sync:$('sync-cron-dash').value,prefs:{av_keep_priority:$('pref-av')?.value||'tag_uc',size_keep:$('pref-size')?.value||'path_long',duration_keep:$('pref-duration')?.value||'min',duration_scope:st.durationScope||'dir',duration_precision:st.durationPrecision||'second',smart_keep:$('pref-smart')?.value||'reso_max',confirm_batch:$('pref-confirm')?.checked?'true':'false'}};
     const resp=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data=await resp.json().catch(()=>({}));
@@ -863,7 +871,7 @@ async function save(){
   }
 }
 async function saveSyncDash(){const ok=await save(); if(ok) await loadTasks()}
-async function lc(){const c=await(await fetch('/api/config')).json();if(c.host&&!c.host.startsWith('http'))c.host='http://'+c.host;if(c.host&&c.host.endsWith('/'))c.host=c.host.slice(0,-1);appConfig=c;$('ch').value=c.host;$('cu').value=c.user;$('cw').value=c.webhook;$('sync-cron-dash').value=c.cron_sync; const p=c.prefs||{}; setDurationScope(['dir','library'].includes(p.duration_scope)?p.duration_scope:'dir'); if($('pref-av')) $('pref-av').value=['tag_uc','tag_c','tag_raw'].includes(p.av_keep_priority)?p.av_keep_priority:'tag_uc'; if($('pref-size')) $('pref-size').value=['path_long','path_short','name_long','name_short'].includes(p.size_keep)?p.size_keep:'path_long'; if($('pref-duration')) $('pref-duration').value=['min','max'].includes(p.duration_keep)?p.duration_keep:'min'; if($('pref-smart')) $('pref-smart').value=['reso_max','reso_min'].includes(p.smart_keep)?p.smart_keep:'reso_max'; if($('pref-confirm')) $('pref-confirm').checked=(p.confirm_batch||'true')==='true'}
+async function lc(){const c=await(await fetch('/api/config')).json();if(c.host&&!c.host.startsWith('http'))c.host='http://'+c.host;if(c.host&&c.host.endsWith('/'))c.host=c.host.slice(0,-1);appConfig=c;$('ch').value=c.host;$('cu').value=c.user;$('cw').value=c.webhook;$('sync-cron-dash').value=c.cron_sync; const p=c.prefs||{}; setDurationScope(['dir','library'].includes(p.duration_scope)?p.duration_scope:'dir'); setDurationPrecision(['second','centisecond'].includes(p.duration_precision)?p.duration_precision:'second'); if($('pref-av')) $('pref-av').value=['tag_uc','tag_c','tag_raw'].includes(p.av_keep_priority)?p.av_keep_priority:'tag_uc'; if($('pref-size')) $('pref-size').value=['path_long','path_short','name_long','name_short'].includes(p.size_keep)?p.size_keep:'path_long'; if($('pref-duration')) $('pref-duration').value=['min','max'].includes(p.duration_keep)?p.duration_keep:'min'; if($('pref-smart')) $('pref-smart').value=['reso_max','reso_min'].includes(p.smart_keep)?p.smart_keep:'reso_max'; if($('pref-confirm')) $('pref-confirm').checked=(p.confirm_batch||'true')==='true'}
 async function testWebhook(){try{const resp=await fetch('/api/test_webhook',{method:'POST'}); if(!resp.ok) throw new Error(`HTTP ${resp.status}`); toast('🔔 Webhook 测试已发送')}catch(e){toast(`❌ Webhook 测试失败: ${e.message||e}`)}}
 async function ll(){const r=await(await fetch('/api/logs')).json();$('lbox').innerHTML=r.map(l=>`<div class="log-line border-b border-white/5 py-1 break-all whitespace-pre-wrap">${l}</div>`).join('');$('lbox').scrollTop=$('lbox').scrollHeight}
 async function clearLogs(){try{const resp=await fetch('/api/logs/clear',{method:'POST'}); if(!resp.ok) throw new Error(`HTTP ${resp.status}`); await ll()}catch(e){toast(`❌ 清空日志失败: ${e.message||e}`)}}

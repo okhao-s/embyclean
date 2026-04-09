@@ -90,10 +90,10 @@ def invalidate_runtime_state(reset_sync_progress: bool = False):
         current_sync_lib = ""
 
 
-def _perform_scan(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0", duration_scope: str = "dir"):
+def _perform_scan(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0", duration_scope: str = "dir", duration_precision: str = "second"):
     db = SessionLocal()
     try:
-        return scanner_service.perform_internal_scan(db, mode, lib, param_s, param_d, duration_scope)
+        return scanner_service.perform_internal_scan(db, mode, lib, param_s, param_d, duration_scope, duration_precision)
     finally:
         db.close()
 
@@ -144,21 +144,24 @@ async def prune_missing_media_items(candidate_ids: List[str], trigger: str = "sc
         db.close()
 
 
-async def perform_scan_async(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0", duration_scope: str = ""):
+async def perform_scan_async(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0", duration_scope: str = "", duration_precision: str = ""):
     if mode == 'duration':
         duration_scope = (duration_scope or '').strip().lower()
-        if not duration_scope:
-            pref_db = SessionLocal()
-            try:
+        duration_precision = (duration_precision or '').strip().lower()
+        pref_db = SessionLocal()
+        try:
+            if not duration_scope:
                 duration_scope = get_conf(pref_db, 'pref.duration.scope') or 'dir'
-            finally:
-                pref_db.close()
-    findings = await asyncio.to_thread(_perform_scan, mode, lib, param_s, param_d, duration_scope or 'dir')
+            if not duration_precision:
+                duration_precision = get_conf(pref_db, 'pref.duration.precision') or 'second'
+        finally:
+            pref_db.close()
+    findings = await asyncio.to_thread(_perform_scan, mode, lib, param_s, param_d, duration_scope or 'dir', duration_precision or 'second')
     candidate_ids = [item.emby_id for group in findings for item in group.get("items", []) if getattr(item, "emby_id", "")]
     if candidate_ids:
         pruned = await prune_missing_media_items(candidate_ids, trigger=f"scan:{mode}")
         if pruned > 0:
-            findings = await asyncio.to_thread(_perform_scan, mode, lib, param_s, param_d, duration_scope)
+            findings = await asyncio.to_thread(_perform_scan, mode, lib, param_s, param_d, duration_scope, duration_precision or 'second')
     return findings
 
 
@@ -456,6 +459,7 @@ def cfg_post(c: ConfigRequest):
             set_conf(db, "pref.size.keep", prefs.get("size_keep", "path_long"))
             set_conf(db, "pref.duration.keep", prefs.get("duration_keep", "min"))
             set_conf(db, "pref.duration.scope", prefs.get("duration_scope", "dir"))
+            set_conf(db, "pref.duration.precision", prefs.get("duration_precision", "second"))
             set_conf(db, "pref.smart.keep", prefs.get("smart_keep", "reso_max"))
             set_conf(db, "pref.batch.confirm", prefs.get("confirm_batch", "true"))
         if get_conf(db, "ssl_verify") == "":
@@ -481,6 +485,7 @@ def cfg_get():
             "size_keep": get_conf(db, "pref.size.keep") or "path_long",
             "duration_keep": get_conf(db, "pref.duration.keep") or "min",
             "duration_scope": get_conf(db, "pref.duration.scope") or "dir",
+            "duration_precision": get_conf(db, "pref.duration.precision") or "second",
             "smart_keep": get_conf(db, "pref.smart.keep") or "reso_max",
             "confirm_batch": get_conf(db, "pref.batch.confirm") or "true",
         }
@@ -539,8 +544,8 @@ async def task_run_now(id: int):
         db.close()
 
 @app.get("/api/scan")
-async def scan_api(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0", duration_scope: str = "dir"):
-    findings = await perform_scan_async(mode, lib, param_s, param_d, duration_scope)
+async def scan_api(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0", duration_scope: str = "dir", duration_precision: str = "second"):
+    findings = await perform_scan_async(mode, lib, param_s, param_d, duration_scope, duration_precision)
     return serialize_findings(findings)
 
 # 🚀 修改：黑名单 API 返回 mode 和 id
