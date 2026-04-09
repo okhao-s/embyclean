@@ -446,7 +446,7 @@ function applyTheme(theme){const t=THEMES.includes(theme)?theme:'obsidian';docum
 function setTheme(theme){applyTheme(theme);toast(`🎨 已切换到 ${theme}`)}
 function closeBatchPreview(){$('batch-preview').classList.remove('open')}
 function bytesHuman(n){if(!n)return '0 B'; const u=['B','KB','MB','GB','TB']; let i=0,v=Number(n); while(v>=1024&&i<u.length-1){v/=1024;i++} return `${v.toFixed(v>=10||i===0?0:1)} ${u[i]}`}
-function prepareDerivedData(){let f=[];st.d.forEach(g=>{const ids=g.items.map(x=>x.emby_id).join(',');g.items.forEach(i=>{f.push({...i,groupTitle:g.title,groupItemsIds:ids,groupRaw:g})})}); st.flat=f}
+function prepareDerivedData(){let f=[];st.d.forEach(g=>{const ids=g.items.map(x=>x.emby_id).join(',');g.items.forEach(i=>{f.push({...i,groupTitle:g.title,groupItemsIds:ids,groupKey:g.group_key||'',groupIgnoreScope:g.ignore_scope||'item',groupMeta:g.group_meta||{},groupRaw:g})})}); st.flat=f}
 function selectedItems(){const flat=getFlatSlice(); return flat.filter(x=>st.s.has(x.emby_id))}
 function selectedSummary(){const items=selectedItems(); const totalSize=items.reduce((a,b)=>a+(b.size||0),0); const recommendedDelete=items.filter(x=>x.recommend_action==='delete').length; const recommendedKeep=items.filter(x=>x.recommend_action==='keep').length; const groups=new Set(items.map(x=>x.groupTitle)).size; return {count:items.length,totalSize,recommendedDelete,recommendedKeep,groups}}
 function previewBatch(actionLabel, onConfirm){const summary=selectedSummary(); if(!summary.count){toast('❌ 未勾选');return} const body=`<div class="grid grid-cols-2 gap-3"><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">操作</div><div class="text-white font-bold mt-1">${actionLabel}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">选中条目</div><div class="text-white font-bold mt-1">${summary.count}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">涉及分组</div><div class="text-white font-bold mt-1">${summary.groups}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">预计影响体积</div><div class="text-white font-bold mt-1">${bytesHuman(summary.totalSize)}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">推荐删除命中</div><div class="text-white font-bold mt-1">${summary.recommendedDelete}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">推荐保留命中</div><div class="text-white font-bold mt-1">${summary.recommendedKeep}</div></div></div>`; $('batch-preview-body').innerHTML=body; $('batch-preview-confirm').onclick=()=>{closeBatchPreview(); onConfirm()}; $('batch-preview').classList.add('open')}
@@ -726,16 +726,18 @@ function removeItemsFromState(ids){
 async function ignoreDurationItemDirect(id, e){
     e.stopPropagation();
     try{
-        const item = st.d.flatMap(g=>g.items).find(x=>x.emby_id===id);
+        const item = st.flat.find(x=>x.emby_id===id);
         if(!item){toast('❌ 条目不存在');return}
+        if(!item.groupKey){toast('❌ 当前分组缺少忽略标识');return}
+        const groupIds = item.groupRaw?.items?.map(x=>x.emby_id).filter(Boolean) || [id];
         const resp = await fetch('/api/ignore',{
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({ids:[id], mode:'duration'})
+            body:JSON.stringify({group_keys:[item.groupKey], mode:'duration'})
         });
         if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        removeItemsFromState([id]);
-        toast(`✅ 已忽略：${item.name||id}`);
+        removeItemsFromState(groupIds);
+        toast(`✅ 已忽略当前分组：${item.groupTitle||item.name||id}`);
     }catch(err){
         console.error(err);
         toast(`❌ 忽略失败: ${err.message||err}`);
@@ -761,7 +763,7 @@ async function deleteDurationItemDirect(id, e){
     }
 }
 async function del() { const run=async()=>{const ids=Array.from(st.s);if(!ids.length)return;st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0);prepareDerivedData();st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden');toast('⚡ 正在执行删除...');await fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})})}; if(prefConfirmEnabled()) previewBatch('批量删除', run); else run() }
-async function ignoreItems(){ const run=async()=>{const ids=Array.from(st.s); if(!ids.length){toast('❌ 未勾选');return} st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0); prepareDerivedData(); st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden'); toast('✅ 已添加忽略'); await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids: ids, mode: st.m})}); }; if(prefConfirmEnabled()) previewBatch('批量忽略', run); else await run() }
+async function ignoreItems(){ const run=async()=>{const ids=Array.from(st.s); if(!ids.length){toast('❌ 未勾选');return} if(st.m==='duration'){ const selected=selectedItems(); const groupKeys=[...new Set(selected.map(x=>x.groupKey).filter(Boolean))]; if(!groupKeys.length){toast('❌ 未找到当前分组标识');return} const removeIds=[...new Set(selected.flatMap(x=>x.groupRaw?.items?.map(i=>i.emby_id)||[]))]; removeItemsFromState(removeIds); st.s.clear(); $('act-bar').classList.add('hidden'); toast('✅ 已忽略当前分组'); await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({group_keys: groupKeys, mode: st.m})}); return } st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0); prepareDerivedData(); st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden'); toast('✅ 已添加忽略'); await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids: ids, mode: st.m})}); }; if(prefConfirmEnabled()) previewBatch(st.m==='duration'?'批量忽略当前分组':'批量忽略', run); else await run() }
 async function refreshItems(){ const run=async()=>{const ids=Array.from(st.s);if(!ids.length){toast('❌ 未选中');return}toast('⏳ 指令下发中...');st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0);prepareDerivedData();st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden');const r=await fetch('/api/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});const res=await r.json();if(res.status==='ok')toast('✅ 指令已送达，后台正在热更新...');else toast('❌ 请求失败')}; if(prefConfirmEnabled()) previewBatch('批量刷新', run); else await run()}
 async function loadIgnored(){
     st.ignS.clear(); const r=await fetch('/api/ignore');let d=await r.json();
@@ -770,7 +772,8 @@ async function loadIgnored(){
     if(mf)d=d.filter(i=>i.mode===mf);
     if(kw)d=d.filter(i=>`${i.name||''} ${i.emby_id||''}`.toLowerCase().includes(kw));
     const modeMap = { "av": "番号", "smart": "洗版", "size": "同大", "duration": "时长", "noposter": "封面", "tiny": "极小", "global": "全局" };
-    $('ignore-list').innerHTML=d.map(i=>`<div class="bg-white/5 p-3 rounded-xl border border-white/5 flex justify-between items-center"><div class="flex items-center gap-3 overflow-hidden min-w-0 flex-1"><input type="checkbox" class="ign-check w-4 h-4 accent-sky-500 cursor-pointer flex-shrink-0" value="${i.id}"><div class="flex flex-col min-w-0"><div class="truncate pr-2 text-xs text-slate-300 font-bold" title="${i.name||i.emby_id}">${i.name||i.emby_id}</div><div class="flex items-center gap-2 mt-1"><span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 font-mono">${modeMap[i.mode] || i.mode}</span><span class="text-[10px] text-slate-600 font-mono truncate">${i.emby_id}</span></div></div></div><button class="btn btn-g py-1 px-3 text-[10px] flex-shrink-0 ml-2" onclick="ignRestoreSingle(${i.id})">恢复</button></div>`).join('') || '<div class="text-slate-500 text-center py-4 text-[10px]">无匹配黑名单</div>'
+    const scopeMap = { item: '单项', group: '分组' };
+    $('ignore-list').innerHTML=d.map(i=>`<div class="bg-white/5 p-3 rounded-xl border border-white/5 flex justify-between items-center"><div class="flex items-center gap-3 overflow-hidden min-w-0 flex-1"><input type="checkbox" class="ign-check w-4 h-4 accent-sky-500 cursor-pointer flex-shrink-0" value="${i.id}"><div class="flex flex-col min-w-0"><div class="truncate pr-2 text-xs text-slate-300 font-bold" title="${i.name||i.emby_id}">${i.name||i.emby_id}</div><div class="flex items-center gap-2 mt-1"><span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 font-mono">${modeMap[i.mode] || i.mode}</span><span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-mono">${scopeMap[i.scope_type] || i.scope_type || '单项'}</span><span class="text-[10px] text-slate-600 font-mono truncate">${i.scope_type==='group' ? (i.scope_key||i.emby_id) : i.emby_id}</span></div></div></div><button class="btn btn-g py-1 px-3 text-[10px] flex-shrink-0 ml-2" onclick="ignRestoreSingle(${i.id})">恢复</button></div>`).join('') || '<div class="text-slate-500 text-center py-4 text-[10px]">无匹配黑名单</div>'
 }
 async function ignRestoreSingle(id){await fetch(`/api/ignore/${id}`,{method:'DELETE'});loadIgnored()}
 async function ignRestoreBulk(){

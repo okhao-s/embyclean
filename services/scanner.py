@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -56,7 +57,21 @@ def _format_duration_group_key(duration_key: Decimal):
     return format(duration_key, '.1f')
 
 
-def _group_duration_duplicates(items):
+def _duration_group_signature(dir_key: str, duration_key: Decimal, items):
+    member_ids = sorted(str(getattr(item, 'emby_id', '') or '') for item in items if getattr(item, 'emby_id', ''))
+    payload = {
+        'scope': 'duration-group-v1',
+        'dir_key': dir_key or '/',
+        'duration_key': _format_duration_group_key(duration_key),
+        'member_ids': member_ids,
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    digest = hashlib.sha1(encoded.encode('utf-8')).hexdigest()
+    return f"duration-group-v1:{digest}"
+
+
+def _group_duration_duplicates(items, ignored_group_keys=None):
+    ignored_group_keys = set(ignored_group_keys or [])
     by_dir = {}
     for item in items:
         dir_key = _dir_key(getattr(item, 'path', ''))
@@ -73,7 +88,20 @@ def _group_duration_duplicates(items):
         title_dir = dir_key or "/"
         for duration_key, duration_items in by_duration.items():
             if len(duration_items) > 1:
-                grouped.append({"title": f"⏱️ {_format_duration_group_key(duration_key)} 秒 · 📁 {title_dir}", "items": duration_items})
+                group_key = _duration_group_signature(dir_key, duration_key, duration_items)
+                if group_key in ignored_group_keys:
+                    continue
+                grouped.append({
+                    "title": f"⏱️ {_format_duration_group_key(duration_key)} 秒 · 📁 {title_dir}",
+                    "items": duration_items,
+                    "group_key": group_key,
+                    "ignore_scope": "group",
+                    "group_meta": {
+                        "dir_key": title_dir,
+                        "duration_key": _format_duration_group_key(duration_key),
+                        "member_count": len(duration_items),
+                    }
+                })
     return grouped
 
 
@@ -123,8 +151,13 @@ def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0"):
             grp.setdefault(r.size, []).append(r)
         grouped = [{"title": f"{k/1e6:.1f} MB", "items": v} for k, v in grp.items()]
     elif mode == "duration":
+        ignored_group_keys = [
+            x.scope_key for x in db.query(IgnoredItem.scope_key)
+            .filter(IgnoredItem.mode == mode, IgnoredItem.scope_type == 'group', IgnoredItem.scope_key != '')
+            .all()
+        ]
         rows = _duration_candidate_items_query(db, ignored, lib_ids).all()
-        grouped = _group_duration_duplicates(rows)
+        grouped = _group_duration_duplicates(rows, ignored_group_keys)
     elif mode == "smart":
         sub = db.query(MediaItem.name).group_by(MediaItem.name).having(func.count(MediaItem.id) > 1)
         rows = q.filter(MediaItem.name.in_(sub)).all(); grp = {}

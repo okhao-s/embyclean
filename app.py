@@ -188,6 +188,9 @@ def serialize_findings(findings):
             items.append(row)
         res.append({
             "title": f.get("title", ""),
+            "group_key": f.get("group_key", ""),
+            "ignore_scope": f.get("ignore_scope", "item"),
+            "group_meta": f.get("group_meta", {}),
             "items": items,
             "summary": {
                 "keep": sum(1 for i in items if i.get('recommend_action') == 'keep'),
@@ -536,24 +539,51 @@ def ignore_get(limit: int = 500, offset: int = 0):
     db = SessionLocal()
     q = db.query(IgnoredItem).order_by(IgnoredItem.id.desc())
     items = q.offset(max(offset, 0)).limit(min(max(limit, 1), 1000)).all()
-    res = [{"id": i.id, "emby_id": i.emby_id, "name": i.name if i.name else i.emby_id, "mode": i.mode} for i in items]
+    res = [{
+        "id": i.id,
+        "emby_id": i.emby_id,
+        "name": i.name if i.name else i.emby_id,
+        "mode": i.mode,
+        "scope_type": i.scope_type,
+        "scope_key": i.scope_key,
+    } for i in items]
     db.close()
     return res
 
-# 🚀 修改：接收 mode 并检查是否重复
+# 🚀 修改：duration 支持按分组忽略，其它模式保持按 item
 @app.post("/api/ignore")
 async def ignore_post(r: IgnoreRequest):
     db = SessionLocal()
-    for eid in r.ids:
-        # 检查是否已存在于该模式
-        exists = db.query(IgnoredItem).filter(IgnoredItem.emby_id == eid, IgnoredItem.mode == r.mode).first()
-        if not exists: 
-            name = ""
-            media = db.query(MediaItem).filter(MediaItem.emby_id == eid).first()
-            if media: name = media.name
-            db.add(IgnoredItem(emby_id=eid, name=name, mode=r.mode))
-            sys_log(f"[IGNORE] 🚫 已忽略 [{r.mode}]: {name if name else eid}")
-    db.commit(); db.close(); return {"status": "ok"}
+    try:
+        if r.mode == 'duration' and r.group_keys:
+            added = 0
+            for group_key in [str(x).strip() for x in r.group_keys if str(x).strip()]:
+                exists = db.query(IgnoredItem).filter(
+                    IgnoredItem.mode == r.mode,
+                    IgnoredItem.scope_type == 'group',
+                    IgnoredItem.scope_key == group_key
+                ).first()
+                if exists:
+                    continue
+                name = f"时长分组忽略 {group_key[-8:]}"
+                db.add(IgnoredItem(emby_id=group_key, name=name, mode=r.mode, scope_type='group', scope_key=group_key))
+                added += 1
+                sys_log(f"[IGNORE] 🚫 已忽略时长分组: {group_key}")
+            db.commit()
+            return {"status": "ok", "added": added, "scope": "group"}
+
+        for eid in r.ids:
+            exists = db.query(IgnoredItem).filter(IgnoredItem.emby_id == eid, IgnoredItem.mode == r.mode).first()
+            if not exists:
+                name = ""
+                media = db.query(MediaItem).filter(MediaItem.emby_id == eid).first()
+                if media: name = media.name
+                db.add(IgnoredItem(emby_id=eid, name=name, mode=r.mode, scope_type='item', scope_key=''))
+                sys_log(f"[IGNORE] 🚫 已忽略 [{r.mode}]: {name if name else eid}")
+        db.commit()
+        return {"status": "ok", "scope": "item"}
+    finally:
+        db.close()
 
 # 🚀 修改：基于 ID 删除
 @app.delete("/api/ignore/{row_id}")

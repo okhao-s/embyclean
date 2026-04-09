@@ -18,6 +18,8 @@ class IgnoredItem(Base):
     emby_id = Column(String)
     name = Column(String, default="")
     mode = Column(String, default="global")
+    scope_type = Column(String, default="item")
+    scope_key = Column(String, default="")
 
 class AuditTask(Base):
     __tablename__ = "audit_tasks"
@@ -76,7 +78,12 @@ def init_db():
                 con.execute(text("ALTER TABLE ignored_items ADD COLUMN name VARCHAR DEFAULT ''"))
             if "mode" not in cols:
                 con.execute(text("ALTER TABLE ignored_items ADD COLUMN mode VARCHAR DEFAULT 'global'"))
+            if "scope_type" not in cols:
+                con.execute(text("ALTER TABLE ignored_items ADD COLUMN scope_type VARCHAR DEFAULT 'item'"))
+            if "scope_key" not in cols:
+                con.execute(text("ALTER TABLE ignored_items ADD COLUMN scope_key VARCHAR DEFAULT ''"))
             con.execute(text("CREATE INDEX IF NOT EXISTS idx_ignored_items_emby_mode ON ignored_items(emby_id, mode)"))
+            con.execute(text("CREATE INDEX IF NOT EXISTS idx_ignored_items_mode_scope ON ignored_items(mode, scope_type, scope_key)"))
         if "audit_tasks" in inspector.get_table_names():
             cols = [c["name"] for c in inspector.get_columns("audit_tasks")]
             if "last_status" not in cols:

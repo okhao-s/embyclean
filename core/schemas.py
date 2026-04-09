@@ -5,8 +5,9 @@ class DeleteRequest(BaseModel):
     ids: List[str]
 
 class IgnoreRequest(BaseModel):
-    ids: List[str]
+    ids: List[str] = []
     mode: str
+    group_keys: List[str] = []
 
 class RefreshRequest(BaseModel):
     ids: List[str]
