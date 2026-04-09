@@ -57,47 +57,78 @@ def _format_duration_group_key(duration_key: Decimal):
     return format(duration_key, '.1f')
 
 
-def _duration_group_signature(dir_key: str, duration_key: Decimal, items):
+def _normalize_duration_scope(scope: str):
+    value = str(scope or 'dir').strip().lower()
+    return 'library' if value == 'library' else 'dir'
+
+
+def _duration_scope_label(scope: str):
+    return '同库' if _normalize_duration_scope(scope) == 'library' else '同目录'
+
+
+def _duration_bucket_key(item, scope: str):
+    scope = _normalize_duration_scope(scope)
+    if scope == 'library':
+        return f"library:{getattr(item, 'library_id', '') or '_unknown'}"
+    return _dir_key(getattr(item, 'path', ''))
+
+
+def _duration_bucket_title(bucket_key: str, scope: str):
+    scope = _normalize_duration_scope(scope)
+    if scope == 'library':
+        return f"📚 库 {bucket_key.split(':', 1)[1] if bucket_key.startswith('library:') else (bucket_key or '_unknown')}"
+    return f"📁 {bucket_key or '/'}"
+
+
+def _duration_group_signature(bucket_key: str, duration_key: Decimal, items, scope: str):
+    scope = _normalize_duration_scope(scope)
     member_ids = sorted(str(getattr(item, 'emby_id', '') or '') for item in items if getattr(item, 'emby_id', ''))
     payload = {
-        'scope': 'duration-group-v1',
-        'dir_key': dir_key or '/',
+        'scope': 'duration-group-v2',
+        'duration_scope': scope,
+        'bucket_key': bucket_key or ('/' if scope == 'dir' else 'library:_unknown'),
         'duration_key': _format_duration_group_key(duration_key),
         'member_ids': member_ids,
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     digest = hashlib.sha1(encoded.encode('utf-8')).hexdigest()
-    return f"duration-group-v1:{digest}"
+    return f"duration-group-v2:{digest}"
 
 
-def _group_duration_duplicates(items, ignored_group_keys=None):
+def _group_duration_duplicates(items, ignored_group_keys=None, scope: str = 'dir'):
+    scope = _normalize_duration_scope(scope)
     ignored_group_keys = set(ignored_group_keys or [])
-    by_dir = {}
+    grouped_items = {}
     for item in items:
-        dir_key = _dir_key(getattr(item, 'path', ''))
-        by_dir.setdefault(dir_key, []).append(item)
+        bucket_key = _duration_bucket_key(item, scope)
+        grouped_items.setdefault(bucket_key, []).append(item)
 
     grouped = []
-    for dir_key, dir_items in by_dir.items():
+    for bucket_key, bucket_items in grouped_items.items():
         by_duration = {}
-        for item in dir_items:
+        for item in bucket_items:
             duration = getattr(item, 'duration', 0) or 0
             duration_key = _duration_group_key(duration)
             by_duration.setdefault(duration_key, []).append(item)
 
-        title_dir = dir_key or "/"
+        bucket_title = _duration_bucket_title(bucket_key, scope)
         for duration_key, duration_items in by_duration.items():
             if len(duration_items) > 1:
-                group_key = _duration_group_signature(dir_key, duration_key, duration_items)
+                group_key = _duration_group_signature(bucket_key, duration_key, duration_items, scope)
                 if group_key in ignored_group_keys:
                     continue
                 grouped.append({
-                    "title": f"⏱️ {_format_duration_group_key(duration_key)} 秒 · 📁 {title_dir}",
+                    "title": f"⏱️ {_format_duration_group_key(duration_key)} 秒 · {bucket_title}",
                     "items": duration_items,
                     "group_key": group_key,
                     "ignore_scope": "group",
                     "group_meta": {
-                        "dir_key": title_dir,
+                        "duration_scope": scope,
+                        "duration_scope_label": _duration_scope_label(scope),
+                        "bucket_key": bucket_key,
+                        "bucket_title": bucket_title,
+                        "dir_key": bucket_key if scope == 'dir' else '',
+                        "library_id": (bucket_key.split(':', 1)[1] if scope == 'library' and bucket_key.startswith('library:') else ''),
                         "duration_key": _format_duration_group_key(duration_key),
                         "member_count": len(duration_items),
                     }
@@ -126,7 +157,7 @@ def _duration_candidate_items_query(db, ignored_emby_ids, lib_ids=None):
         q = q.filter(MediaItem.library_id.in_(lib_ids))
     return q.filter(MediaItem.duration > 0.1)
 
-def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0"):
+def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0", duration_scope="dir"):
     lib_ids = [x for x in lib_str.split(',') if x] if lib_str else []
     ignored = [x.emby_id for x in db.query(IgnoredItem.emby_id).filter(IgnoredItem.mode == mode).all()]
     q = db.query(MediaItem)
@@ -151,13 +182,14 @@ def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0"):
             grp.setdefault(r.size, []).append(r)
         grouped = [{"title": f"{k/1e6:.1f} MB", "items": v} for k, v in grp.items()]
     elif mode == "duration":
+        duration_scope = _normalize_duration_scope(duration_scope)
         ignored_group_keys = [
             x.scope_key for x in db.query(IgnoredItem.scope_key)
             .filter(IgnoredItem.mode == mode, IgnoredItem.scope_type == 'group', IgnoredItem.scope_key != '')
             .all()
         ]
         rows = _duration_candidate_items_query(db, ignored, lib_ids).all()
-        grouped = _group_duration_duplicates(rows, ignored_group_keys)
+        grouped = _group_duration_duplicates(rows, ignored_group_keys, duration_scope)
     elif mode == "smart":
         sub = db.query(MediaItem.name).group_by(MediaItem.name).having(func.count(MediaItem.id) > 1)
         rows = q.filter(MediaItem.name.in_(sub)).all(); grp = {}
