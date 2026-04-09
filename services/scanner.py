@@ -40,6 +40,10 @@ def _sort_grouped_by_created_desc(grouped):
     grouped.sort(key=group_key, reverse=True)
     return grouped
 
+def _dir_key(path: str):
+    normalized = os.path.normpath(path or '')
+    return os.path.dirname(normalized)
+
 def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0"):
     ignored = [x.emby_id for x in db.query(IgnoredItem).filter(IgnoredItem.mode == mode).all()]
     q = db.query(MediaItem).filter(~MediaItem.emby_id.in_(ignored))
@@ -64,12 +68,14 @@ def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0"):
     elif mode == "duration":
         all_items = q.filter(MediaItem.duration > 0.1).all(); grp = {}
         for item in all_items:
-            key = round(item.duration, 2)
+            dir_key = _dir_key(getattr(item, 'path', ''))
+            key = (dir_key, round(item.duration, 2))
             grp.setdefault(key, []).append(item)
         final_grp = []
-        for k, v in grp.items():
+        for (dir_key, duration_key), v in grp.items():
             if len(v) > 1:
-                final_grp.append({"title": f"⏱️ {k} 秒", "items": v})
+                title_dir = dir_key or "/"
+                final_grp.append({"title": f"⏱️ {duration_key} 秒 · 📁 {title_dir}", "items": v})
         grouped = final_grp
     elif mode == "smart":
         sub = db.query(MediaItem.name).group_by(MediaItem.name).having(func.count(MediaItem.id) > 1)
