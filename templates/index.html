@@ -416,7 +416,8 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
 <div id="batch-preview" class="modal"><div class="modal-box max-w-xl"><div class="text-xl font-bold mb-4 text-white">批量操作预览</div><div id="batch-preview-body" class="text-sm text-slate-300 space-y-2"></div><div class="flex justify-end gap-3 mt-6"><button class="btn btn-g px-5" onclick="closeBatchPreview()">取消</button><button class="btn btn-p px-5" id="batch-preview-confirm">确认执行</button></div></div></div>
 <script>
 const $=id=>document.getElementById(id);
-let appConfig={},st={m:'av',ls:new Set(),d:[],flat:[],p:1,s:new Set(),sid:'',ignS:new Set(),loaded:0,loading:false},PAGE_SIZE=50,currentTasks=[];
+let appConfig={},st={m:'av',ls:new Set(),d:[],flat:[],p:1,s:new Set(),sid:'',ignS:new Set(),loaded:0,loading:false,scanSeq:0,scanCtrl:null,scanBusy:false,scanBtnText:''},PAGE_SIZE=50,currentTasks=[];
+const SCAN_BTN_SELECTOR="button[onclick=\"scan()\"]";
 const THEMES=['obsidian','frost','terminal','paper'];
 function applyTheme(theme){const t=THEMES.includes(theme)?theme:'obsidian';document.body.setAttribute('data-theme',t);document.querySelectorAll('[data-theme-option]').forEach(el=>el.classList.toggle('active', el.dataset.themeOption===t));localStorage.setItem('embyclean_theme', t)}
 function setTheme(theme){applyTheme(theme);toast(`🎨 已切换到 ${theme}`)}
@@ -439,6 +440,40 @@ $('content-area').addEventListener('scroll', () => {
 });
 
 function toast(msg){const t=document.createElement('div');t.className='toast';t.innerText=msg;$('toast-box').appendChild(t);setTimeout(()=>{t.remove()},3500)}
+function getScanBtn(){return document.querySelector(SCAN_BTN_SELECTOR)}
+function setScanBusy(busy){const btn=getScanBtn(); st.scanBusy=busy; if(!btn)return; if(!st.scanBtnText) st.scanBtnText=btn.innerText; btn.disabled=busy; btn.classList.toggle('opacity-60', busy); btn.classList.toggle('cursor-not-allowed', busy); btn.innerText=busy?'⏳ 扫描中...':(st.scanBtnText||'🔍 开始扫描')}
+function updateActionBar(){
+    $('dn').innerText = st.s.size;
+    if(st.s.size > 0)$('act-bar').classList.remove('hidden');else $('act-bar').classList.add('hidden');
+}
+function updateGroupHeaderStateByIds(ids){
+    if(!ids)return;
+    const selector = `[data-group-ids="${CSS.escape(ids)}"]`;
+    const header = document.querySelector(selector);
+    if(!header)return;
+    const allChecked = ids.split(',').every(id=>st.s.has(id));
+    const input = header.querySelector('input[type="checkbox"]');
+    if(input) input.checked = allChecked;
+    header.dataset.groupChecked = allChecked ? '1' : '0';
+}
+function refreshVisibleSelectionState(){
+    document.querySelectorAll('.res-item').forEach(el=>{
+        const id = el.dataset.embyId;
+        const checked = !!id && st.s.has(id);
+        el.classList.toggle('checked', checked);
+        const mark = el.querySelector('[data-role="item-check"]');
+        if(mark) mark.innerHTML = checked ? '✅' : '⬜';
+    });
+    document.querySelectorAll('[data-group-ids]').forEach(header=>{
+        const ids = header.dataset.groupIds || '';
+        if(!ids)return;
+        const allChecked = ids.split(',').every(id=>st.s.has(id));
+        const input = header.querySelector('input[type="checkbox"]');
+        if(input) input.checked = allChecked;
+        header.dataset.groupChecked = allChecked ? '1' : '0';
+    });
+    updateActionBar();
+}
 function confirmUI(t,d,i,y){$('conf-title').innerText=t;$('conf-desc').innerText=d;$('conf-icon').innerText=i;$('conf-modal').classList.add('open');$('conf-yes').onclick=()=>{y();closeConf()}}
 function closeConf(){$('conf-modal').classList.remove('open')}
 function nav(p,el){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));$('p-'+p).classList.add('active');if(el){document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));el.classList.add('active')} if(p=='settings'){lc();loadIgnored();loadTasks()} if(p=='logs'){ll()}}
@@ -458,19 +493,45 @@ function tl(e,i){if(st.ls.has(i)){st.ls.delete(i);e.classList.remove('selected')
 function mode(m,e){st.m=m;document.querySelectorAll('.mode-btn').forEach(x=>x.classList.remove('active'));if(e)e.classList.add('active');if(m=='tiny')$('opt-t').classList.remove('hidden');else $('opt-t').classList.add('hidden')}
 
 async function scan(){
+    if(st.scanBusy){
+        toast('⏳ 扫描进行中，别连点');
+        return;
+    }
+    const seq = ++st.scanSeq;
+    if(st.scanCtrl) st.scanCtrl.abort();
+    const controller = new AbortController();
+    st.scanCtrl = controller;
+    setScanBusy(true);
     $('loader').style.display='flex';
-    let u=`/api/scan?mode=${st.m}&lib=${Array.from(st.ls).join(',')}&param_s=${$('inp-t').value}&param_d=${$('inp-d').value}`;
-    const r=await fetch(u);
-    st.d=await r.json();
-    prepareDerivedData();
-    st.s.clear();
-    st.loaded = 0; 
-    st.loading = false;
-    $('rbox').innerHTML = ''; 
-    rt(); 
-    nav('results');
-    renderMore(); 
-    $('loader').style.display='none';
+    try{
+        let u=`/api/scan?mode=${st.m}&lib=${Array.from(st.ls).join(',')}&param_s=${$('inp-t').value}&param_d=${$('inp-d').value}`;
+        const r=await fetch(u,{signal:controller.signal});
+        if(!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data=await r.json();
+        if(seq!==st.scanSeq) return;
+        st.d=data;
+        prepareDerivedData();
+        st.s.clear();
+        st.loaded = 0;
+        st.loading = false;
+        $('rbox').innerHTML = '';
+        rt();
+        nav('results');
+        renderMore();
+    }catch(err){
+        if(err?.name === 'AbortError'){
+            if(seq===st.scanSeq) toast('⚠️ 扫描已取消');
+            return;
+        }
+        console.error(err);
+        toast(`❌ 扫描失败: ${err.message||err}`);
+    }finally{
+        if(st.scanCtrl===controller) st.scanCtrl=null;
+        if(seq===st.scanSeq){
+            setScanBusy(false);
+            $('loader').style.display='none';
+        }
+    }
 }
 
 function rt(){
@@ -483,13 +544,14 @@ function rt(){
 
 function bat(t,a){
     const f=getFlatSlice();
-    const s=f.slice(0, st.loaded); 
-    s.forEach(i=>{let m=false; const g=i.groupRaw; if(t=='all')m=a;if(t=='tag'){if(a=='tag_raw')m=!i.tag_c&&!i.tag_uc&&!i.tag_u;else m=i[a]}if(t=='reso')m=i.resolution==a;
+    const s=f.slice(0, st.loaded);
+    const touchedGroups = new Set();
+    s.forEach(i=>{let m=false; const g=i.groupRaw; if(g?.items?.length) touchedGroups.add(i.groupItemsIds); if(t=='all')m=a;if(t=='tag'){if(a=='tag_raw')m=!i.tag_c&&!i.tag_uc&&!i.tag_u;else m=i[a]}if(t=='reso')m=i.resolution==a;
     if(t=='len'&&g){if(a=='path_long'){const sr=[...g.items].sort((x,y)=>(x.path||'').length-(y.path||'').length);if(i.emby_id===sr[sr.length-1].emby_id)m=true}if(a=='path_short'){const sr=[...g.items].sort((x,y)=>(x.path||'').length-(y.path||'').length);if(i.emby_id===sr[0].emby_id)m=true}if(a=='name_long'){const sr=[...g.items].sort((x,y)=>(x.name||'').length-(y.name||'').length);if(i.emby_id===sr[sr.length-1].emby_id)m=true}if(a=='name_short'){const sr=[...g.items].sort((x,y)=>(x.name||'').length-(y.name||'').length);if(i.emby_id===sr[0].emby_id)m=true}}
     if(t=='filesize'&&g){const sr=[...g.items].sort((x,y)=>(x.size||0)-(y.size||0));if(a=='min'&&i.emby_id===sr[0].emby_id)m=true;if(a=='max'&&i.emby_id===sr[sr.length-1].emby_id)m=true}
-    if(m)st.s.add(i.emby_id);else if(t=='all'&&!a)st.s.delete(i.emby_id);});
-    // 不清空重新渲染，只刷新状态
-    st.loaded = 0; $('rbox').innerHTML = ''; renderMore(s.length);
+    if(m)st.s.add(i.emby_id);else if(t==='all' || t==='tag' || t==='reso' || t==='len' || t==='filesize') st.s.delete(i.emby_id);});
+    touchedGroups.forEach(updateGroupHeaderStateByIds);
+    refreshVisibleSelectionState();
 }
 
 function getFlatSlice(){return st.flat||[]}
@@ -532,7 +594,7 @@ function renderMore(count = PAGE_SIZE) {
         if(i.groupItemsIds!==lg){
             const allC=i.groupRaw.items.every(x=>st.s.has(x.emby_id));
             // 🚀 组选择逻辑：点击整个标题栏 (onclick) 触发
-            h+=`<div class="bg-slate-800/40 rounded-2xl overflow-hidden mb-4 border border-white/5 shadow-xl mt-4"><div class="px-5 py-4 border-b border-white/5 bg-white/5 font-bold text-sky-400 flex items-center gap-4 cursor-pointer hover:bg-white/10 transition" onclick="togG('${i.groupItemsIds}',!${allC})"><input type="checkbox" class="w-5 h-5 accent-sky-500 cursor-pointer flex-shrink-0 pointer-events-none" ${allC?'checked':''}><span class="text-lg truncate select-none">${i.groupTitle}</span></div>`;
+            h+=`<div class="bg-slate-800/40 rounded-2xl overflow-hidden mb-4 border border-white/5 shadow-xl mt-4"><div class="px-5 py-4 border-b border-white/5 bg-white/5 font-bold text-sky-400 flex items-center gap-4 cursor-pointer hover:bg-white/10 transition" data-group-ids="${i.groupItemsIds}" data-group-checked="${allC?'1':'0'}" onclick="togG('${i.groupItemsIds}', event)"><input type="checkbox" class="w-5 h-5 accent-sky-500 cursor-pointer flex-shrink-0 pointer-events-none" ${allC?'checked':''}><span class="text-lg truncate select-none">${i.groupTitle}</span></div>`;
             lg=i.groupItemsIds;
         }
 
@@ -560,7 +622,7 @@ function renderMore(count = PAGE_SIZE) {
         const pathRow = st.m === 'duration'
             ? `<div class="duration-top-row">${durationMeta}${durationIgnoreBtn}</div>`
             : `<div class="mt-1 break-all text-xs text-slate-400 font-mono leading-tight">${subT}</div>`;
-        h+=`<div class="res-item ${k?'checked':''}" onclick="tog(${st.loaded + idx})"><div class="w-8 text-center text-xl flex-shrink-0">${k?'✅':'⬜'}</div>${img}<div class="flex-1 px-4 min-w-0"><div class="font-bold truncate text-white text-base flex items-center gap-2">${i.name} ${tags}</div>${pathRow}<div class='text-[10px] mt-1 text-slate-500 font-mono'><span class="text-sky-300 font-bold mr-1">${(i.size/1e6).toFixed(1)}MB</span></div></div>${jI}</div>`
+        h+=`<div class="res-item ${k?'checked':''}" data-emby-id="${i.emby_id}" data-group-ids="${i.groupItemsIds}" onclick="tog(${st.loaded + idx}, event)"><div class="w-8 text-center text-xl flex-shrink-0" data-role="item-check">${k?'✅':'⬜'}</div>${img}<div class="flex-1 px-4 min-w-0"><div class="font-bold truncate text-white text-base flex items-center gap-2">${i.name} ${tags}</div>${pathRow}<div class='text-[10px] mt-1 text-slate-500 font-mono'><span class="text-sky-300 font-bold mr-1">${(i.size/1e6).toFixed(1)}MB</span></div></div>${jI}</div>`
         
         if (idx === slice.length - 1 || slice[idx+1].groupItemsIds !== i.groupItemsIds) {
              h+=`</div>`; 
@@ -577,22 +639,40 @@ function renderMore(count = PAGE_SIZE) {
     $('load-status').innerText = st.loaded >= f.length ? "✅ 已加载全部" : "🖱️ 下滑加载更多...";
 }
 
-function tog(idx){
+function tog(idx,e){
+    if(e) e.stopPropagation();
     const f=getFlatSlice();
     const i=f[idx];
+    if(!i) return;
     if(st.s.has(i.emby_id))st.s.delete(i.emby_id);else st.s.add(i.emby_id);
-    const items = document.querySelectorAll('.res-item');
-    if(items[idx]) {
-        if(st.s.has(i.emby_id)) items[idx].classList.add('checked'); else items[idx].classList.remove('checked');
-        items[idx].querySelector('div:first-child').innerHTML = st.s.has(i.emby_id) ? '✅' : '⬜';
+    const el = document.querySelector(`.res-item[data-emby-id="${CSS.escape(i.emby_id)}"]`);
+    if(el) {
+        const checked = st.s.has(i.emby_id);
+        el.classList.toggle('checked', checked);
+        const mark = el.querySelector('[data-role="item-check"]');
+        if(mark) mark.innerHTML = checked ? '✅' : '⬜';
     }
-    $('dn').innerText = st.s.size;
-    if(st.s.size > 0)$('act-bar').classList.remove('hidden');else $('act-bar').classList.add('hidden');
+    updateGroupHeaderStateByIds(i.groupItemsIds);
+    updateActionBar();
 }
 
-function togG(ids,c){ids.split(',').forEach(id=>{if(c)st.s.add(id);else st.s.delete(id)}); 
-    // 重置并刷新当前已加载数量，确保视觉一致
-    st.loaded = 0; $('rbox').innerHTML = ''; renderMore(Math.max(PAGE_SIZE, document.querySelectorAll('.res-item').length));
+function togG(ids,e){
+    if(e) e.stopPropagation();
+    const parts=(ids||'').split(',').filter(Boolean);
+    if(!parts.length) return;
+    const allChecked = parts.every(id=>st.s.has(id));
+    parts.forEach(id=>{if(allChecked)st.s.delete(id);else st.s.add(id)});
+    parts.forEach(id=>{
+        const itemEl = document.querySelector(`.res-item[data-emby-id="${CSS.escape(id)}"]`);
+        if(itemEl){
+            const checked = st.s.has(id);
+            itemEl.classList.toggle('checked', checked);
+            const mark = itemEl.querySelector('[data-role="item-check"]');
+            if(mark) mark.innerHTML = checked ? '✅' : '⬜';
+        }
+    });
+    updateGroupHeaderStateByIds(ids);
+    updateActionBar();
 }
 
 function jumpToEmby(eid, e) { e.stopPropagation(); if(!appConfig.host){toast("❌ 配置未加载");return} const target=st.sid?`${appConfig.host}/web/index.html#!/item?id=${eid}&serverId=${st.sid}`:`${appConfig.host}/web/index.html#!/item?id=${eid}`; window.open(target, '_blank'); }
@@ -616,8 +696,7 @@ async function ignoreDurationItemDirect(id, e){
         $('rbox').innerHTML='';
         st.loaded=0;
         renderMore();
-        $('dn').innerText = st.s.size;
-        if(st.s.size > 0)$('act-bar').classList.remove('hidden');else $('act-bar').classList.add('hidden');
+        updateActionBar();
         toast(`✅ 已忽略：${item.name||id}`);
     }catch(err){
         console.error(err);

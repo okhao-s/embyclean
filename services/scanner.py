@@ -75,11 +75,36 @@ def _group_duration_duplicates(items):
                 grouped.append({"title": f"⏱️ {_format_duration_group_key(duration_key)} 秒 · 📁 {title_dir}", "items": duration_items})
     return grouped
 
+
+def _duration_candidate_duration_keys_query(db, lib_ids=None):
+    duration_key_expr = func.round(MediaItem.duration * 10, 0) / 10.0
+    q = db.query(duration_key_expr.label('duration_key')).filter(MediaItem.duration > 0.1)
+    if lib_ids:
+        q = q.filter(MediaItem.library_id.in_(lib_ids))
+    return q.group_by(duration_key_expr).having(func.count(MediaItem.id) > 1)
+
+
+def _duration_candidate_items_query(db, ignored_emby_ids, lib_ids=None):
+    candidate_duration_keys = _duration_candidate_duration_keys_query(db, lib_ids).subquery()
+    duration_key_expr = func.round(MediaItem.duration * 10, 0) / 10.0
+    q = db.query(MediaItem).join(
+        candidate_duration_keys,
+        candidate_duration_keys.c.duration_key == duration_key_expr
+    )
+    if ignored_emby_ids:
+        q = q.filter(~MediaItem.emby_id.in_(ignored_emby_ids))
+    if lib_ids:
+        q = q.filter(MediaItem.library_id.in_(lib_ids))
+    return q.filter(MediaItem.duration > 0.1)
+
 def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0"):
-    ignored = [x.emby_id for x in db.query(IgnoredItem).filter(IgnoredItem.mode == mode).all()]
-    q = db.query(MediaItem).filter(~MediaItem.emby_id.in_(ignored))
-    if lib_str:
-        q = q.filter(MediaItem.library_id.in_(lib_str.split(',')))
+    lib_ids = [x for x in lib_str.split(',') if x] if lib_str else []
+    ignored = [x.emby_id for x in db.query(IgnoredItem.emby_id).filter(IgnoredItem.mode == mode).all()]
+    q = db.query(MediaItem)
+    if ignored:
+        q = q.filter(~MediaItem.emby_id.in_(ignored))
+    if lib_ids:
+        q = q.filter(MediaItem.library_id.in_(lib_ids))
 
     grouped = []
     if mode == "av":
@@ -97,8 +122,8 @@ def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0"):
             grp.setdefault(r.size, []).append(r)
         grouped = [{"title": f"{k/1e6:.1f} MB", "items": v} for k, v in grp.items()]
     elif mode == "duration":
-        all_items = q.filter(MediaItem.duration > 0.1).all()
-        grouped = _group_duration_duplicates(all_items)
+        rows = _duration_candidate_items_query(db, ignored, lib_ids).all()
+        grouped = _group_duration_duplicates(rows)
     elif mode == "smart":
         sub = db.query(MediaItem.name).group_by(MediaItem.name).having(func.count(MediaItem.id) > 1)
         rows = q.filter(MediaItem.name.in_(sub)).all(); grp = {}

@@ -67,6 +67,9 @@ def init_db():
             con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_duration ON media_items(duration)"))
             con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_name ON media_items(name)"))
             con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_date_created ON media_items(date_created)"))
+            con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_library_duration ON media_items(library_id, duration)"))
+            con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_library_name ON media_items(library_id, name)"))
+            con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_library_size ON media_items(library_id, size)"))
         if "ignored_items" in inspector.get_table_names():
             cols = [c["name"] for c in inspector.get_columns("ignored_items")]
             if "name" not in cols:
