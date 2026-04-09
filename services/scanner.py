@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from decimal import Decimal, ROUND_HALF_UP
 from sqlalchemy import func
 from core.db import MediaItem, IgnoredItem, get_conf
 
@@ -44,6 +45,16 @@ def _dir_key(path: str):
     normalized = os.path.normpath(path or '')
     return os.path.dirname(normalized)
 
+
+def _duration_group_key(duration):
+    value = Decimal(str(duration or 0))
+    return value.quantize(Decimal('0.1'), rounding=ROUND_HALF_UP)
+
+
+def _format_duration_group_key(duration_key: Decimal):
+    return format(duration_key, '.1f')
+
+
 def _group_duration_duplicates(items):
     by_dir = {}
     for item in items:
@@ -52,16 +63,16 @@ def _group_duration_duplicates(items):
 
     grouped = []
     for dir_key, dir_items in by_dir.items():
-        by_second = {}
+        by_duration = {}
         for item in dir_items:
             duration = getattr(item, 'duration', 0) or 0
-            second_key = int(duration)
-            by_second.setdefault(second_key, []).append(item)
+            duration_key = _duration_group_key(duration)
+            by_duration.setdefault(duration_key, []).append(item)
 
         title_dir = dir_key or "/"
-        for second_key, second_items in by_second.items():
-            if len(second_items) > 1:
-                grouped.append({"title": f"⏱️ {second_key} 秒 · 📁 {title_dir}", "items": second_items})
+        for duration_key, duration_items in by_duration.items():
+            if len(duration_items) > 1:
+                grouped.append({"title": f"⏱️ {_format_duration_group_key(duration_key)} 秒 · 📁 {title_dir}", "items": duration_items})
     return grouped
 
 def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0"):
