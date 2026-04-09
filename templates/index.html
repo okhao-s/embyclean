@@ -233,6 +233,8 @@ input { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border
 .duration-top-meta { min-width: 0; flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
 .duration-time-chip { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 999px; font-size: 10px; line-height: 1; font-weight: 800; letter-spacing: .02em; color: #7dd3fc; background: rgba(14, 165, 233, 0.14); border: 1px solid rgba(56, 189, 248, 0.28); box-shadow: 0 0 0 1px rgba(255,255,255,0.03) inset; }
 .duration-path-block { min-width: 0; flex: 1 1 320px; }
+.duration-actions { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.duration-delete-btn,
 .duration-ignore-btn {
     display: inline-flex;
     align-items: center;
@@ -242,6 +244,21 @@ input { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border
     line-height: 1;
     font-weight: 800;
     color: #fff;
+}
+.duration-delete-btn {
+    background: linear-gradient(135deg, rgba(244, 63, 94, 0.98), rgba(225, 29, 72, 0.98));
+    border: 1px solid rgba(251, 113, 133, 0.78);
+    box-shadow: 0 10px 24px -14px rgba(244, 63, 94, 0.95), 0 0 0 1px rgba(255,255,255,0.08) inset;
+}
+.duration-delete-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 14px 28px -14px rgba(244, 63, 94, 1), 0 0 0 1px rgba(255,255,255,0.12) inset;
+}
+.duration-delete-btn:focus-visible {
+    outline: 2px solid rgba(251, 113, 133, 0.9);
+    outline-offset: 2px;
+}
+.duration-ignore-btn {
     background: linear-gradient(135deg, rgba(249, 115, 22, 0.98), rgba(234, 88, 12, 0.98));
     border: 1px solid rgba(251, 146, 60, 0.78);
     box-shadow: 0 10px 24px -14px rgba(249, 115, 22, 0.95), 0 0 0 1px rgba(255,255,255,0.08) inset;
@@ -254,11 +271,14 @@ input { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border
     outline: 2px solid rgba(251, 191, 36, 0.9);
     outline-offset: 2px;
 }
+.results-footer-actions { display: flex; justify-content: center; padding: 8px 0 28px; }
+.back-to-top-btn { min-width: 160px; box-shadow: 0 12px 28px -18px rgba(56, 189, 248, 0.7); }
+.back-to-top-btn.hidden { display: none; }
 @media (max-width: 640px) {
     .duration-top-row { flex-direction: column; align-items: stretch; }
     .duration-top-meta { width: 100%; }
     .duration-path-block { flex-basis: 100%; }
-    .duration-ignore-btn { align-self: flex-start; }
+    .duration-actions { align-self: flex-start; flex-wrap: wrap; }
 }
 
 .theme-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
@@ -362,6 +382,9 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
    </div>
    <div id="rbox" class="flex flex-col gap-4"></div>
    <div id="load-status">✨ 准备就绪</div>
+   <div class="results-footer-actions">
+      <button id="btn-back-top" class="btn btn-g back-to-top-btn hidden" type="button" onclick="scrollResultsToTop()">⬆️ 回到顶部</button>
+   </div>
    
    <div id="act-bar" class="fixed bottom-12 right-12 flex gap-4 hidden z-50">
       <button id="btn-ignore" class="btn btn-o bg-orange-500 text-white shadow-lg shadow-orange-500/30" onclick="ignoreItems()">🚫 忽略</button>
@@ -429,11 +452,22 @@ function selectedSummary(){const items=selectedItems(); const totalSize=items.re
 function previewBatch(actionLabel, onConfirm){const summary=selectedSummary(); if(!summary.count){toast('❌ 未勾选');return} const body=`<div class="grid grid-cols-2 gap-3"><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">操作</div><div class="text-white font-bold mt-1">${actionLabel}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">选中条目</div><div class="text-white font-bold mt-1">${summary.count}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">涉及分组</div><div class="text-white font-bold mt-1">${summary.groups}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">预计影响体积</div><div class="text-white font-bold mt-1">${bytesHuman(summary.totalSize)}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">推荐删除命中</div><div class="text-white font-bold mt-1">${summary.recommendedDelete}</div></div><div class="bg-white/5 rounded-xl p-3 border border-white/5"><div class="text-slate-400 text-xs">推荐保留命中</div><div class="text-white font-bold mt-1">${summary.recommendedKeep}</div></div></div>`; $('batch-preview-body').innerHTML=body; $('batch-preview-confirm').onclick=()=>{closeBatchPreview(); onConfirm()}; $('batch-preview').classList.add('open')}
 function prefConfirmEnabled(){return $('pref-confirm') ? $('pref-confirm').checked : true}
 function chooseRecommended(){const flat=getFlatSlice().slice(0, st.loaded); flat.forEach(i=>{ if(i.recommend_action==='delete') st.s.add(i.emby_id); else st.s.delete(i.emby_id)}); st.loaded=0; $('rbox').innerHTML=''; renderMore(flat.length)}
-window.onload=()=>{applyTheme(localStorage.getItem('embyclean_theme')||'obsidian');poll();gl();lc();setInterval(poll,5000);setInterval(()=>{if($('p-logs').classList.contains('active')) ll()},5000)};
+window.onload=()=>{applyTheme(localStorage.getItem('embyclean_theme')||'obsidian');poll();gl();lc();toggleBackToTopButton();setInterval(poll,5000);setInterval(()=>{if($('p-logs').classList.contains('active')) ll()},5000)};
+
+function toggleBackToTopButton(){
+    const btn = $('btn-back-top');
+    const el = $('content-area');
+    if(!btn || !el) return;
+    btn.classList.toggle('hidden', el.scrollTop < 320);
+}
+function scrollResultsToTop(){
+    $('content-area')?.scrollTo({top:0, behavior:'smooth'});
+}
 
 /* 🚀 监听滚动事件：无限加载 */
 $('content-area').addEventListener('scroll', () => {
     const el = $('content-area');
+    toggleBackToTopButton();
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 100) {
         renderMore();
     }
@@ -612,15 +646,15 @@ function renderMore(count = PAGE_SIZE) {
             }
         }
         
-        // duration 模式把忽略按钮挪到顶部时间/路径区，保持直接忽略
-        const durationIgnoreBtn = st.m === 'duration'
-            ? `<button type="button" class="btn btn-o duration-ignore-btn flex-shrink-0" onclick="ignoreDurationItemDirect('${i.emby_id}', event)">🚫 忽略</button>`
+        // duration 模式把删除/忽略按钮挪到顶部时间/路径区，保持直接执行
+        const durationActions = st.m === 'duration'
+            ? `<div class="duration-actions"><button type="button" class="btn btn-d duration-delete-btn" onclick="deleteDurationItemDirect('${i.emby_id}', event)">🗑️ 删除</button><button type="button" class="btn btn-o duration-ignore-btn" onclick="ignoreDurationItemDirect('${i.emby_id}', event)">🚫 忽略</button></div>`
             : '';
         const durationMeta = st.m === 'duration'
             ? `<div class="duration-top-meta"><span class="duration-time-chip">⏱️ ${i.duration||0}S</span><div class="duration-path-block break-all text-xs text-slate-400 font-mono leading-tight">${subT}</div></div>`
             : '';
         const pathRow = st.m === 'duration'
-            ? `<div class="duration-top-row">${durationMeta}${durationIgnoreBtn}</div>`
+            ? `<div class="duration-top-row">${durationMeta}${durationActions}</div>`
             : `<div class="mt-1 break-all text-xs text-slate-400 font-mono leading-tight">${subT}</div>`;
         h+=`<div class="res-item ${k?'checked':''}" data-emby-id="${i.emby_id}" data-group-ids="${i.groupItemsIds}" onclick="tog(${st.loaded + idx}, event)"><div class="w-8 text-center text-xl flex-shrink-0" data-role="item-check">${k?'✅':'⬜'}</div>${img}<div class="flex-1 px-4 min-w-0"><div class="font-bold truncate text-white text-base flex items-center gap-2">${i.name} ${tags}</div>${pathRow}<div class='text-[10px] mt-1 text-slate-500 font-mono'><span class="text-sky-300 font-bold mr-1">${(i.size/1e6).toFixed(1)}MB</span></div></div>${jI}</div>`
         
@@ -676,6 +710,19 @@ function togG(ids,e){
 }
 
 function jumpToEmby(eid, e) { e.stopPropagation(); if(!appConfig.host){toast("❌ 配置未加载");return} const target=st.sid?`${appConfig.host}/web/index.html#!/item?id=${eid}&serverId=${st.sid}`:`${appConfig.host}/web/index.html#!/item?id=${eid}`; window.open(target, '_blank'); }
+function removeItemsFromState(ids){
+    const removeSet = new Set(ids);
+    ids.forEach(id=>st.s.delete(id));
+    st.d=st.d.map(g=>({
+        ...g,
+        items:g.items.filter(x=>!removeSet.has(x.emby_id))
+    })).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0);
+    prepareDerivedData();
+    $('rbox').innerHTML='';
+    st.loaded=0;
+    renderMore();
+    updateActionBar();
+}
 async function ignoreDurationItemDirect(id, e){
     e.stopPropagation();
     try{
@@ -687,20 +734,30 @@ async function ignoreDurationItemDirect(id, e){
             body:JSON.stringify({ids:[id], mode:'duration'})
         });
         if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        st.s.delete(id);
-        st.d=st.d.map(g=>({
-            ...g,
-            items:g.items.filter(x=>x.emby_id!==id)
-        })).filter(g=>g.items.length>1);
-        prepareDerivedData();
-        $('rbox').innerHTML='';
-        st.loaded=0;
-        renderMore();
-        updateActionBar();
+        removeItemsFromState([id]);
         toast(`✅ 已忽略：${item.name||id}`);
     }catch(err){
         console.error(err);
         toast(`❌ 忽略失败: ${err.message||err}`);
+    }
+}
+async function deleteDurationItemDirect(id, e){
+    e.stopPropagation();
+    try{
+        const item = st.d.flatMap(g=>g.items).find(x=>x.emby_id===id);
+        if(!item){toast('❌ 条目不存在');return}
+        removeItemsFromState([id]);
+        toast(`⚡ 正在删除：${item.name||id}`);
+        const resp = await fetch('/api/delete',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({ids:[id]})
+        });
+        if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        toast(`✅ 已删除：${item.name||id}`);
+    }catch(err){
+        console.error(err);
+        toast(`❌ 删除失败: ${err.message||err}`);
     }
 }
 async function del() { const run=async()=>{const ids=Array.from(st.s);if(!ids.length)return;st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0);prepareDerivedData();st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden');toast('⚡ 正在执行删除...');await fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})})}; if(prefConfirmEnabled()) previewBatch('批量删除', run); else run() }
