@@ -520,7 +520,13 @@ function renderMore(count = PAGE_SIZE) {
         }
         
         // 🚀 路径字体从 10px 提升到 12px (text-[10px] -> text-xs)
-        h+=`<div class="res-item ${k?'checked':''}" onclick="tog(${st.loaded + idx})"><div class="w-8 text-center text-xl flex-shrink-0">${k?'✅':'⬜'}</div>${img}<div class="flex-1 px-4 min-w-0"><div class="font-bold truncate text-white text-base flex items-center gap-2">${i.name} ${tags}</div><div class="mt-1 break-all text-xs text-slate-400 font-mono leading-tight">${subT}</div><div class='text-[10px] mt-1 text-slate-500 font-mono'><span class="text-sky-300 font-bold mr-1">${(i.size/1e6).toFixed(1)}MB</span> | ${i.duration||0}S</div></div>${jI}</div>`
+        const durationIgnoreBtn = st.m === 'duration'
+            ? `<button class="btn btn-o py-1 px-2 text-[10px] ml-2 flex-shrink-0" onclick="ignoreDurationItemDirect('${i.emby_id}', event)">忽略</button>`
+            : '';
+        const pathRow = st.m === 'duration'
+            ? `<div class="mt-1 flex items-start gap-2"><div class="break-all text-xs text-slate-400 font-mono leading-tight min-w-0 flex-1">${subT}</div>${durationIgnoreBtn}</div>`
+            : `<div class="mt-1 break-all text-xs text-slate-400 font-mono leading-tight">${subT}</div>`;
+        h+=`<div class="res-item ${k?'checked':''}" onclick="tog(${st.loaded + idx})"><div class="w-8 text-center text-xl flex-shrink-0">${k?'✅':'⬜'}</div>${img}<div class="flex-1 px-4 min-w-0"><div class="font-bold truncate text-white text-base flex items-center gap-2">${i.name} ${tags}</div>${pathRow}<div class='text-[10px] mt-1 text-slate-500 font-mono'><span class="text-sky-300 font-bold mr-1">${(i.size/1e6).toFixed(1)}MB</span> | ${i.duration||0}S</div></div>${jI}</div>`
         
         if (idx === slice.length - 1 || slice[idx+1].groupItemsIds !== i.groupItemsIds) {
              h+=`</div>`; 
@@ -556,6 +562,34 @@ function togG(ids,c){ids.split(',').forEach(id=>{if(c)st.s.add(id);else st.s.del
 }
 
 function jumpToEmby(eid, e) { e.stopPropagation(); if(!appConfig.host){toast("❌ 配置未加载");return} const target=st.sid?`${appConfig.host}/web/index.html#!/item?id=${eid}&serverId=${st.sid}`:`${appConfig.host}/web/index.html#!/item?id=${eid}`; window.open(target, '_blank'); }
+async function ignoreDurationItemDirect(id, e){
+    e.stopPropagation();
+    try{
+        const item = st.d.flatMap(g=>g.items).find(x=>x.emby_id===id);
+        if(!item){toast('❌ 条目不存在');return}
+        const resp = await fetch('/api/ignore',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({ids:[id], mode:'duration'})
+        });
+        if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        st.s.delete(id);
+        st.d=st.d.map(g=>({
+            ...g,
+            items:g.items.filter(x=>x.emby_id!==id)
+        })).filter(g=>g.items.length>1);
+        prepareDerivedData();
+        $('rbox').innerHTML='';
+        st.loaded=0;
+        renderMore();
+        $('dn').innerText = st.s.size;
+        if(st.s.size > 0)$('act-bar').classList.remove('hidden');else $('act-bar').classList.add('hidden');
+        toast(`✅ 已忽略：${item.name||id}`);
+    }catch(err){
+        console.error(err);
+        toast(`❌ 忽略失败: ${err.message||err}`);
+    }
+}
 async function del() { const run=async()=>{const ids=Array.from(st.s);if(!ids.length)return;st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0);prepareDerivedData();st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden');toast('⚡ 正在执行删除...');await fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})})}; if(prefConfirmEnabled()) previewBatch('批量删除', run); else run() }
 async function ignoreItems(){ const run=async()=>{const ids=Array.from(st.s); if(!ids.length){toast('❌ 未勾选');return} st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0); prepareDerivedData(); st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden'); toast('✅ 已添加忽略'); await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids: ids, mode: st.m})}); }; if(prefConfirmEnabled()) previewBatch('批量忽略', run); else await run() }
 async function refreshItems(){ const run=async()=>{const ids=Array.from(st.s);if(!ids.length){toast('❌ 未选中');return}toast('⏳ 指令下发中...');st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size'].includes(st.m)?g.items.length>1:g.items.length>0);prepareDerivedData();st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden');const r=await fetch('/api/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});const res=await r.json();if(res.status==='ok')toast('✅ 指令已送达，后台正在热更新...');else toast('❌ 请求失败')}; if(prefConfirmEnabled()) previewBatch('批量刷新', run); else await run()}
