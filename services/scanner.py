@@ -44,6 +44,42 @@ def _dir_key(path: str):
     normalized = os.path.normpath(path or '')
     return os.path.dirname(normalized)
 
+def _group_duration_duplicates(items, threshold_seconds=4.0):
+    by_dir = {}
+    for item in items:
+        dir_key = _dir_key(getattr(item, 'path', ''))
+        by_dir.setdefault(dir_key, []).append(item)
+
+    grouped = []
+    for dir_key, dir_items in by_dir.items():
+        ordered = sorted(
+            dir_items,
+            key=lambda x: (
+                (getattr(x, 'duration', 0) or 0),
+                getattr(x, 'id', 0) or 0,
+                getattr(x, 'emby_id', '') or ''
+            )
+        )
+        start = 0
+        while start < len(ordered):
+            end = start
+            start_duration = getattr(ordered[start], 'duration', 0) or 0
+            while end + 1 < len(ordered):
+                next_duration = getattr(ordered[end + 1], 'duration', 0) or 0
+                if abs(next_duration - start_duration) <= threshold_seconds:
+                    end += 1
+                else:
+                    break
+            if end > start:
+                window = ordered[start:end + 1]
+                min_duration = min((getattr(x, 'duration', 0) or 0) for x in window)
+                max_duration = max((getattr(x, 'duration', 0) or 0) for x in window)
+                title_dir = dir_key or "/"
+                duration_label = f"{min_duration:.2f} 秒" if min_duration == max_duration else f"{min_duration:.2f}-{max_duration:.2f} 秒"
+                grouped.append({"title": f"⏱️ {duration_label} · 📁 {title_dir}", "items": window})
+            start = end + 1
+    return grouped
+
 def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0"):
     ignored = [x.emby_id for x in db.query(IgnoredItem).filter(IgnoredItem.mode == mode).all()]
     q = db.query(MediaItem).filter(~MediaItem.emby_id.in_(ignored))
@@ -66,17 +102,8 @@ def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0"):
             grp.setdefault(r.size, []).append(r)
         grouped = [{"title": f"{k/1e6:.1f} MB", "items": v} for k, v in grp.items()]
     elif mode == "duration":
-        all_items = q.filter(MediaItem.duration > 0.1).all(); grp = {}
-        for item in all_items:
-            dir_key = _dir_key(getattr(item, 'path', ''))
-            key = (dir_key, round(item.duration, 2))
-            grp.setdefault(key, []).append(item)
-        final_grp = []
-        for (dir_key, duration_key), v in grp.items():
-            if len(v) > 1:
-                title_dir = dir_key or "/"
-                final_grp.append({"title": f"⏱️ {duration_key} 秒 · 📁 {title_dir}", "items": v})
-        grouped = final_grp
+        all_items = q.filter(MediaItem.duration > 0.1).all()
+        grouped = _group_duration_duplicates(all_items, threshold_seconds=4.0)
     elif mode == "smart":
         sub = db.query(MediaItem.name).group_by(MediaItem.name).having(func.count(MediaItem.id) > 1)
         rows = q.filter(MediaItem.name.in_(sub)).all(); grp = {}
