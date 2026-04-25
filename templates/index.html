@@ -704,9 +704,12 @@ function renderMore(count = PAGE_SIZE) {
             }
         }
         
-        // duration 模式把删除/忽略按钮挪到顶部时间/路径区，保持直接执行
+        // 🚀 所有模式统一添加删除/忽略按钮
         const durationActions = st.m === 'duration'
             ? `<div class="duration-actions"><button type="button" class="btn btn-d duration-delete-btn" onclick="deleteDurationItemDirect('${i.emby_id}', event)">🗑️ 删除</button><button type="button" class="btn btn-o duration-ignore-btn" onclick="ignoreDurationItemDirect('${i.emby_id}', event)">🚫 忽略</button></div>`
+            : '';
+        const otherActions = st.m !== 'duration'
+            ? `<div class="duration-actions"><button type="button" class="btn btn-d duration-delete-btn" onclick="deleteItemDirect('${i.emby_id}', event)">🗑️ 删除</button><button type="button" class="btn btn-o duration-ignore-btn" onclick="ignoreItemDirect('${i.emby_id}', event)">🚫 忽略</button></div>`
             : '';
         const durationScopeChip = st.m === 'duration' ? `<span class="duration-time-chip">${i.groupMeta?.duration_scope_label||'同目录'}</span>` : '';
         const durationPrecisionChip = st.m === 'duration' ? `<span class="duration-time-chip">${i.groupMeta?.duration_precision_label||'整秒'}</span>` : '';
@@ -715,7 +718,7 @@ function renderMore(count = PAGE_SIZE) {
             : '';
         const pathRow = st.m === 'duration'
             ? `<div class="duration-top-row">${durationMeta}${durationActions}</div>`
-            : `<div class="mt-1 break-all text-xs text-slate-400 font-mono leading-tight">${subT}</div>`;
+            : `<div class="duration-top-row"><div class="duration-top-meta"><div class="duration-path-block break-all text-xs text-slate-400 font-mono leading-tight">${subT}</div></div>${otherActions}</div>`;
         h+=`<div class="res-item ${k?'checked':''}" data-emby-id="${i.emby_id}" data-group-ids="${i.groupItemsIds}" onclick="tog(${st.loaded + idx}, event)"><div class="w-8 text-center text-xl flex-shrink-0" data-role="item-check">${k?'✅':'⬜'}</div>${img}<div class="flex-1 px-4 min-w-0"><div class="font-bold truncate text-white text-base flex items-center gap-2">${i.name} ${tags}</div>${pathRow}<div class='text-[10px] mt-1 text-slate-500 font-mono'><span class="text-sky-300 font-bold mr-1">${(i.size/1e6).toFixed(1)}MB</span></div></div>${jI}</div>`
         
         if (idx === slice.length - 1 || slice[idx+1].groupItemsIds !== i.groupItemsIds) {
@@ -803,10 +806,47 @@ async function ignoreDurationItemDirect(id, e){
         toast(`❌ 忽略失败: ${err.message||err}`);
     }
 }
+async function ignoreItemDirect(id, e){
+    e.stopPropagation();
+    try{
+        const item = st.flat.find(x=>x.emby_id===id);
+        if(!item){toast('❌ 条目不存在');return}
+        const resp = await fetch('/api/ignore',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({ids:[id], mode:st.m})
+        });
+        if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        removeItemsFromState([id]);
+        toast(`✅ 已忽略：${item.name||id}`);
+    }catch(err){
+        console.error(err);
+        toast(`❌ 忽略失败: ${err.message||err}`);
+    }
+}
 async function deleteDurationItemDirect(id, e){
     e.stopPropagation();
     try{
         const item = st.d.flatMap(g=>g.items).find(x=>x.emby_id===id);
+        if(!item){toast('❌ 条目不存在');return}
+        removeItemsFromState([id]);
+        toast(`⚡ 正在删除：${item.name||id}`);
+        const resp = await fetch('/api/delete',{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({ids:[id]})
+        });
+        if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        toast(`✅ 已删除：${item.name||id}`);
+    }catch(err){
+        console.error(err);
+        toast(`❌ 删除失败: ${err.message||err}`);
+    }
+}
+async function deleteItemDirect(id, e){
+    e.stopPropagation();
+    try{
+        const item = st.flat.find(x=>x.emby_id===id);
         if(!item){toast('❌ 条目不存在');return}
         removeItemsFromState([id]);
         toast(`⚡ 正在删除：${item.name||id}`);
