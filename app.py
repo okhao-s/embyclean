@@ -548,6 +548,38 @@ async def scan_api(mode: str, lib: str = "", param_s: str = "100", param_d: str 
     findings = await perform_scan_async(mode, lib, param_s, param_d, duration_scope, duration_precision)
     return serialize_findings(findings)
 
+@app.get("/api/media-list")
+async def media_list_api(lib_id: str = "", sort: str = "asc", page: int = 1, page_size: int = 50):
+    """按时长排序列出指定媒体库的所有媒体"""
+    db = SessionLocal()
+    try:
+        q = db.query(MediaItem)
+        if lib_id:
+            q = q.filter(MediaItem.library_id == lib_id)
+        if sort == "desc":
+            q = q.order_by(MediaItem.duration.desc(), MediaItem.name)
+        else:
+            q = q.order_by(MediaItem.duration.asc(), MediaItem.name)
+        total = q.count()
+        items = q.offset((page - 1) * page_size).limit(page_size).all()
+        result = []
+        for x in items:
+            row = {c.name: getattr(x, c.name) for c in x.__table__.columns}
+            row.update({
+                'display_path': os.path.dirname(x.path) + "/" if x.path else "",
+                'duration_fmt': f"{x.duration:.2f}s" if x.duration else "0s",
+                'size_mb': f"{x.size/1e6:.1f}" if x.size else "0",
+            })
+            result.append(row)
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "items": result,
+        }
+    finally:
+        db.close()
+
 # 🚀 修改：黑名单 API 返回 mode 和 id
 @app.get("/api/ignore")
 def ignore_get(limit: int = 500, offset: int = 0):

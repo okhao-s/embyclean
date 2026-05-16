@@ -391,6 +391,7 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
      <button class="mode-btn" onclick="mode('duration',this)"><span class="mode-icon">⏳</span><span class="text-xs font-bold">时长查重</span></button>
      <button class="mode-btn" onclick="mode('noposter',this)"><span class="mode-icon">🖼️</span><span class="text-xs font-bold">缺失封面</span></button>
      <button class="mode-btn" onclick="mode('tiny',this)"><span class="mode-icon">🐜</span><span class="text-xs font-bold">极小文件</span></button>
+     <button class="mode-btn" onclick="mode('sort',this)"><span class="mode-icon">📊</span><span class="text-xs font-bold">时长排序</span></button>
     </div>
     <div id="opt-t" class="hidden flex justify-center mb-8 items-center gap-4 text-slate-400 font-bold bg-black/20 p-4 rounded-xl border border-white/5 mx-auto w-fit">
       大小 < <input type="number" id="inp-t" value="100" class="w-24 text-center text-xl text-sky-400 font-mono"> MB &nbsp;&nbsp;|&nbsp;&nbsp; 时长 < <input type="number" id="inp-d" value="0" class="w-24 text-center text-xl text-sky-400 font-mono"> 秒
@@ -411,6 +412,17 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
    </div>
   </div>
 
+  <div id="p-sort" class="page result-container">
+   <div class="card"><h2 class="text-xl font-bold mb-6 text-white">选择媒体库</h2><div id="sort-libs" class="lib-grid">读取中...</div></div>
+   <div class="card"><h2 class="text-xl font-bold mb-6 text-white">排序方式</h2>
+    <div class="flex justify-center gap-4 mb-6">
+     <button class="btn btn-p px-8 py-3" id="btn-sort-asc" onclick="setSortOrder('asc')">⬆ 从短到长</button>
+     <button class="btn btn-g px-8 py-3" id="btn-sort-desc" onclick="setSortOrder('desc')">⬇ 从长到短</button>
+    </div>
+    <div class="flex justify-center"><button class="btn btn-p px-16 py-6 text-2xl shadow-2xl shadow-sky-500/20" onclick="loadMediaList()">📋 加载媒体列表</button></div>
+   </div>
+  </div>
+
   <div id="p-results" class="page result-container">
    <div class="sticky top-0 bg-[#020617]/95 backdrop-blur-xl z-20 pb-4 border-b border-white/5 mb-6 flex flex-wrap justify-between items-center pt-2 px-2">
     <div class="flex gap-6 items-center flex-shrink-0"><button class="btn btn-g" onclick="nav('cleaner')">⬅ 返回</button>
@@ -427,6 +439,22 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
       <button id="btn-refresh" class="btn btn-p shadow-lg shadow-sky-500/30" onclick="refreshItems()">🔄 重新刮削</button>
       <button id="btn-del" class="btn btn-d shadow-lg shadow-rose-500/30" onclick="del()">🗑️ 删除选中 (<span id="dn">0</span>)</button>
    </div>
+  </div>
+
+  <div id="p-sort-results" class="page result-container">
+   <div class="sticky top-0 bg-[#020617]/95 backdrop-blur-xl z-20 pb-4 border-b border-white/5 mb-6 flex flex-wrap justify-between items-center pt-2 px-2">
+    <div class="flex gap-6 items-center flex-shrink-0">
+        <button class="btn btn-g" onclick="nav('sort')">⬅ 返回</button>
+        <span class="text-slate-400">已展示 <b id="sr-shown" class="text-sky-400 text-xl font-mono">0</b> / 共 <b id="sr-total" class="text-white text-xl font-mono">0</b> 项</span>
+    </div>
+    <div class="flex flex-wrap gap-2">
+        <button class="btn btn-g text-xs" id="btn-sort-toggle" onclick="toggleSortOrder()">⬆ 当前: 从短到长</button>
+        <button class="btn btn-g text-xs" onclick="loadMediaList(1)">🔄 刷新</button>
+    </div>
+   </div>
+   <div id="sr-box" class="flex flex-col gap-4"></div>
+   <div id="sr-load-status">✨ 准备就绪</div>
+   <button id="btn-back-top-sr" class="btn btn-g back-to-top-btn hidden" type="button" onclick="scrollSortResultsToTop()" aria-label="回到顶部" title="回到顶部">⬆️</button>
   </div>
 
   <div id="p-logs" class="page result-container"><div class="flex justify-between items-center mb-6"><h1 class="text-2xl font-bold text-white">系统日志</h1><button class="btn btn-g" onclick="clearLogs()">🗑️ 清空</button></div><div class="card bg-black/50 font-mono h-[70vh] overflow-auto p-8 leading-relaxed text-sm text-slate-300 border-white/5" id="lbox"></div></div>
@@ -475,7 +503,7 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
 <div id="batch-preview" class="modal"><div class="modal-box max-w-xl"><div class="text-xl font-bold mb-4 text-white">批量操作预览</div><div id="batch-preview-body" class="text-sm text-slate-300 space-y-2"></div><div class="flex justify-end gap-3 mt-6"><button class="btn btn-g px-5" onclick="closeBatchPreview()">取消</button><button class="btn btn-p px-5" id="batch-preview-confirm">确认执行</button></div></div></div>
 <script>
 const $=id=>document.getElementById(id);
-let appConfig={},st={m:'av',ls:new Set(),d:[],flat:[],p:1,s:new Set(),sid:'',ignS:new Set(),loaded:0,loading:false,scanSeq:0,scanCtrl:null,scanBusy:false,scanBtnText:'',durationScope:'dir',durationPrecision:'second'},PAGE_SIZE=50,currentTasks=[];
+let appConfig={},st={m:'av',ls:new Set(),d:[],flat:[],p:1,s:new Set(),sid:'',ignS:new Set(),loaded:0,loading:false,scanSeq:0,scanCtrl:null,scanBusy:false,scanBtnText:'',durationScope:'dir',durationPrecision:'second',sortOrder:'asc',sortLibId:'',sortPage:1,sortTotal:0,sortItems:[]},PAGE_SIZE=50,currentTasks=[];
 const SCAN_BTN_SELECTOR="button[onclick=\"scan()\"]";
 const THEMES=['obsidian','frost','terminal','paper'];
 function applyTheme(theme){const t=THEMES.includes(theme)?theme:'obsidian';document.body.setAttribute('data-theme',t);document.querySelectorAll('[data-theme-option]').forEach(el=>el.classList.toggle('active', el.dataset.themeOption===t));localStorage.setItem('embyclean_theme', t)}
@@ -498,15 +526,16 @@ function isResultsPageActive(){
 }
 function syncBackToTopOffset(){
     const btn = $('btn-back-top');
+    const btnSr = $('btn-back-top-sr');
     const actBar = $('act-bar');
-    if(!btn || !actBar) return;
-    btn.classList.toggle('with-action-bar', !actBar.classList.contains('hidden'));
+    if(btn && actBar) btn.classList.toggle('with-action-bar', !actBar.classList.contains('hidden'));
+    if(btnSr && actBar) btnSr.classList.toggle('with-action-bar', !actBar.classList.contains('hidden'));
 }
 function toggleBackToTopButton(){
     const btn = $('btn-back-top');
     const el = getScrollContainer();
     if(!btn || !el) return;
-    const shouldShow = isResultsPageActive() && el.scrollTop >= 320;
+    const shouldShow = (isResultsPageActive() || isSortResultsPageActive()) && el.scrollTop >= 320;
     btn.classList.toggle('hidden', !shouldShow);
     syncBackToTopOffset();
 }
@@ -515,15 +544,24 @@ function scrollResultsToTop(){
     if(!el || !isResultsPageActive()) return;
     el.scrollTo({top:0, behavior:'smooth'});
 }
+function scrollSortResultsToTop(){
+    const el = getScrollContainer();
+    if(!el || !$('p-sort-results')?.classList.contains('active')) return;
+    el.scrollTo({top:0, behavior:'smooth'});
+}
+function isSortResultsPageActive(){
+    return !!$('p-sort-results')?.classList.contains('active');
+}
 
 /* 🚀 监听滚动事件：无限加载 */
 $('content-area').addEventListener('scroll', () => {
     const el = getScrollContainer();
     if (!el) return;
     toggleBackToTopButton();
-    if (!isResultsPageActive()) return;
+    if (!isResultsPageActive() && !isSortResultsPageActive()) return;
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 100) {
-        renderMore();
+        if (isResultsPageActive()) renderMore();
+        if (isSortResultsPageActive()) renderSortMore();
     }
 });
 
@@ -566,7 +604,7 @@ function refreshVisibleSelectionState(){
 }
 function confirmUI(t,d,i,y){$('conf-title').innerText=t;$('conf-desc').innerText=d;$('conf-icon').innerText=i;$('conf-modal').classList.add('open');$('conf-yes').onclick=()=>{y();closeConf()}}
 function closeConf(){$('conf-modal').classList.remove('open')}
-function nav(p,el){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));$('p-'+p).classList.add('active');if(el){document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));el.classList.add('active')} if(p=='settings'){lc();loadIgnored();loadTasks()} if(p=='logs'){ll()} toggleBackToTopButton()}
+function nav(p,el){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));$('p-'+p).classList.add('active');if(el){document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));el.classList.add('active')} if(p=='settings'){lc();loadIgnored();loadTasks()} if(p=='logs'){ll()} if(p=='sort'){glSortLibs()} toggleBackToTopButton()}
 async function poll(){
  try{const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),4000);const resp=await fetch('/api/status',{signal:controller.signal});clearTimeout(timer);const r=await resp.json();
  $('sb-loc').innerText=r.local_cache;$('sb-cln').innerText=r.cleaned_count;let ss=Number(r.saved_space)||0;$('sb-spc').innerText=(ss/1073741824).toFixed(2)+" GB";
@@ -582,7 +620,18 @@ async function gl(){const r=await fetch('/api/libraries');const d=await r.json()
 function tl(e,i){if(st.ls.has(i)){st.ls.delete(i);e.classList.remove('selected')}else{st.ls.add(i);e.classList.add('selected')}}
 function setDurationScope(v){st.durationScope=(v==='library'?'library':'dir'); if($('inp-duration-scope')) $('inp-duration-scope').value=st.durationScope}
 function setDurationPrecision(v){st.durationPrecision=(v==='centisecond'?'centisecond':'second'); if($('inp-duration-precision')) $('inp-duration-precision').value=st.durationPrecision}
-function mode(m,e){st.m=m;document.querySelectorAll('.mode-btn').forEach(x=>x.classList.remove('active'));if(e)e.classList.add('active');if(m=='tiny')$('opt-t').classList.remove('hidden');else $('opt-t').classList.add('hidden'); if(m=='duration')$('opt-duration-scope').classList.remove('hidden'); else $('opt-duration-scope').classList.add('hidden')}
+function mode(m,e){st.m=m;document.querySelectorAll('.mode-btn').forEach(x=>x.classList.remove('active'));if(e)e.classList.add('active');if(m=='tiny')$('opt-t').classList.remove('hidden');else $('opt-t').classList.add('hidden'); if(m=='duration')$('opt-duration-scope').classList.remove('hidden'); else $('opt-duration-scope').classList.add('hidden'); if(m=='sort'){nav('sort');} else if($('p-cleaner').classList.contains('active')){$('sort-libs')&&$('sort-libs').classList.add('hidden')}}
+
+function setSortOrder(order){st.sortOrder=order;updateSortButtons();}
+function updateSortButtons(){const asc=$('btn-sort-asc');const desc=$('btn-sort-desc');if(st.sortOrder==='asc'){asc.classList.add('btn-p');asc.classList.remove('btn-g');desc.classList.add('btn-g');desc.classList.remove('btn-p');$('btn-sort-toggle').innerText='⬆ 当前: 从短到长'}else{desc.classList.add('btn-p');desc.classList.remove('btn-g');asc.classList.add('btn-g');asc.classList.remove('btn-p');$('btn-sort-toggle').innerText='⬇ 当前: 从长到短'}}
+function toggleSortOrder(){st.sortOrder=st.sortOrder==='asc'?'desc':'asc';updateSortButtons();loadMediaList(1);}
+async function glSortLibs(){const r=await fetch('/api/libraries');const libs=await r.json();const prevLib=st.ls.size>0?Array.from(st.ls)[0]:'';st.sortLibId=prevLib;$('sort-libs').innerHTML=libs.map(l=>`<div class="lib-card ${l.Id===prevLib?'selected':''}" onclick="tlSortLib(this,'${l.Id}')"><img src="${l.ImageTags?.Primary?appConfig.host+'/emby/Items/'+l.Id+'/Images/Primary?maxHeight=300':''}"><div class="lib-name">${l.Name}</div></div>`).join('');if(!prevLib)toast('💡 请选择一个媒体库进行时长排序')}
+function tlSortLib(e,i){if(st.sortLibId===i){st.sortLibId='';e.classList.remove('selected');toast('⚠️ 请选择一个媒体库')}else{st.sortLibId=i;document.querySelectorAll('#sort-libs .lib-card').forEach(x=>x.classList.remove('selected'));e.classList.add('selected')}}
+async function loadMediaList(resetPage=0){if(!st.sortLibId){toast('⚠️ 请先选择一个媒体库');return}if(resetPage===0)st.sortPage=1;else st.sortPage=resetPage;st.sortTotal=0;st.sortItems=[];$('sr-box').innerHTML='';$('sr-load-status').innerText='⏳ 加载中...';try{const r=await fetch(`/api/media-list?lib_id=${encodeURIComponent(st.sortLibId)}&sort=${st.sortOrder}&page=${st.sortPage}&page_size=${PAGE_SIZE}`);const data=await r.json();st.sortTotal=data.total;st.sortItems=data.items;renderSortMore();}catch(err){toast(`❌ 加载失败: ${err.message||err}`);$('sr-load-status').innerText='❌ 加载失败'}}
+function renderSortMore(count=PAGE_SIZE){if(st.sortItems.length===0){$('sr-load-status').innerText='✨ 该库暂无媒体';return}const start=(st.sortPage-1)*count;const end=start+count;const slice=st.sortItems.slice(0,count);let h='';slice.forEach((item,idx)=>{const k=st.s.has(item.emby_id);const img=item.has_poster?`<img src="${appConfig.host}/emby/Items/${item.emby_id}/Images/Primary?maxHeight=150" class="w-16 h-24 object-cover mx-4 rounded-lg flex-shrink-0 shadow-md">`:'';const recBadge=item.recommend_action==='keep'?`<span class="text-[10px] px-2 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/20">推荐保留</span>`:(item.recommend_action==='delete'?`<span class="text-[10px] px-2 py-1 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/20">推荐删除</span>`:'');const recReason=item.recommend_reason?`<div class="text-[11px] text-slate-400 mt-1">${item.recommend_reason}</div>`:'';const pathDisplay=`<span class="path-base">${item.display_path||''}</span><span class="path-diff">${item.path?item.path.replace(item.display_path||'',''):'--'}</span>`;const jI=`<svg onclick="jumpToEmby('${item.emby_id}', event)" class="w-5 h-5 text-sky-400 hover:text-white cursor-pointer ml-auto flex-shrink-0 transition hover:scale-125" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>`;const actions=`<div class="duration-actions"><button type="button" class="btn btn-d duration-delete-btn" onclick="deleteSortItemDirect('${item.emby_id}', event)">🗑️ 删除</button><button type="button" class="btn btn-o duration-ignore-btn" onclick="ignoreSortItemDirect('${item.emby_id}', event)">🚫 忽略</button></div>`;h+=`<div class="res-item ${k?'checked':''}" data-emby-id="${item.emby_id}" onclick="togSort(${idx}, event)"><div class="w-8 text-center text-xl flex-shrink-0" data-role="item-check">${k?'✅':'⬜'}</div>${img}<div class="flex-1 px-4 min-w-0"><div class="font-bold truncate text-white text-base flex items-center gap-2">${item.name} ${recBadge}</div><div class="duration-top-row"><div class="duration-top-meta"><span class="duration-time-chip">⏱️ ${item.duration_fmt||item.duration||0}</span><span class="text-[10px] px-2 py-1 rounded-full bg-slate-700/50 text-slate-300">${item.size_mb||0} MB</span><div class="duration-path-block break-all text-xs text-slate-400 font-mono leading-tight">${pathDisplay}</div></div>${actions}</div>${recReason}</div>${jI}</div>`});$('sr-box').insertAdjacentHTML('beforeend',h);st.sortPage++;$('sr-total').innerText=st.sortTotal;$('sr-shown').innerText=Math.min(slice.length+(st.sortPage-2)*count, st.sortTotal);if(st.sortPage>1)document.getElementById('btn-back-top-sr').classList.remove('hidden');if((st.sortPage-1)*count>=st.sortTotal){$('sr-load-status').innerText='✅ 已加载全部'}else{$('sr-load-status').innerText='🖱️ 下滑加载更多...'}}
+function togSort(idx,e){if(e)e.stopPropagation();const item=st.sortItems[idx];if(!item)return;if(st.s.has(item.emby_id))st.s.delete(item.emby_id);else st.s.add(item.emby_id);const el=document.querySelector(`.res-item[data-emby-id="${CSS.escape(item.emby_id)}"]`);if(el){const checked=st.s.has(item.emby_id);el.classList.toggle('checked',checked);const mark=el.querySelector('[data-role="item-check"]');if(mark)mark.innerHTML=checked?'✅':'⬜';}updateActionBar();}
+async function ignoreSortItemDirect(id,e){e.stopPropagation();try{const item=st.sortItems.find(x=>x.emby_id===id);if(!item){toast('❌ 条目不存在');return}const resp=await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:[id],mode:st.m})});if(!resp.ok)throw new Error(`HTTP ${resp.status}`);st.sortItems=st.sortItems.filter(x=>x.emby_id!==id);renderSortMore(0);toast(`✅ 已忽略：${item.name||id}`);updateActionBar();}catch(err){toast(`❌ 忽略失败: ${err.message||err}`);}}
+async function deleteSortItemDirect(id,e){e.stopPropagation();try{const item=st.sortItems.find(x=>x.emby_id===id);if(!item){toast('❌ 条目不存在');return}st.sortItems=st.sortItems.filter(x=>x.emby_id!==id);renderSortMore(0);toast(`⚡ 正在删除：${item.name||id}`);const resp=await fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:[id]})});if(!resp.ok)throw new Error(`HTTP ${resp.status}`);toast(`✅ 已删除：${item.name||id}`);poll();updateActionBar();}catch(err){toast(`❌ 删除失败: ${err.message||err}`);}}
 
 async function scan(){
     if(st.scanBusy){
