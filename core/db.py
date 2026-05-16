@@ -56,6 +56,13 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    # 初始化默认统计值
+    with SessionLocal() as db:
+        if not db.query(Config).filter(Config.key == "cleaned_count").first():
+            db.add(Config(key="cleaned_count", value="0"))
+        if not db.query(Config).filter(Config.key == "saved_space").first():
+            db.add(Config(key="saved_space", value="0"))
+        db.commit()
     inspector = inspect(engine)
     with engine.connect() as con:
         if "media_items" in inspector.get_table_names():

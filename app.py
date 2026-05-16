@@ -635,8 +635,14 @@ async def background_silent_delete(ids, host, token):
         for eid in [x for x in results if x]:
             i = db.query(MediaItem).filter(MediaItem.emby_id == eid).first()
             if i:
-                c += 1; s += i.size; db.delete(i); await wb_buffer.add(i.size)
-        db.commit(); set_conf(db, "cleaned_count", str(int(get_conf(db, "cleaned_count") or 0) + c)); set_conf(db, "saved_space", str(int(get_conf(db, "saved_space") or 0) + s))
+                c += 1
+                sz = i.size or 0  # 防止 None 导致累加错误
+                s += sz
+                db.delete(i)
+                await wb_buffer.add(sz)
+        db.commit()
+        set_conf(db, "cleaned_count", str(int(get_conf(db, "cleaned_count") or 0) + c))
+        set_conf(db, "saved_space", str(int(get_conf(db, "saved_space") or 0) + s))
         if failed:
             preview = ', '.join([f"{eid}:{reason}" for eid, reason in failed[:5]])
             sys_log(f"[DELETE] ⚠️ 删除完成，成功 {c} 个，失败 {len(failed)} 个 -> {preview}")
