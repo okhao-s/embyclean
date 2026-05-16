@@ -569,7 +569,7 @@ function closeConf(){$('conf-modal').classList.remove('open')}
 function nav(p,el){document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));$('p-'+p).classList.add('active');if(el){document.querySelectorAll('.nav-item').forEach(x=>x.classList.remove('active'));el.classList.add('active')} if(p=='settings'){lc();loadIgnored();loadTasks()} if(p=='logs'){ll()} toggleBackToTopButton()}
 async function poll(){
  try{const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),4000);const resp=await fetch('/api/status',{signal:controller.signal});clearTimeout(timer);const r=await resp.json();
- $('sb-loc').innerText=r.local_cache;$('sb-cln').innerText=r.cleaned_count;$('sb-spc').innerText=(r.saved_space/1e9).toFixed(2)+" GB";
+ $('sb-loc').innerText=r.local_cache;$('sb-cln').innerText=r.cleaned_count;let ss=Number(r.saved_space)||0;$('sb-spc').innerText=(ss/1073741824).toFixed(2)+" GB";
  if(r.connected){$('st-name').innerText=r.server_name||"✅ 已连接";$('st-name').className="font-bold text-white text-lg truncate";$('dot').className="dot-main dot-online"}else{$('st-name').innerText="离线";$('dot').className="dot-main"}
  $('st-ver').innerText=`版本: ${r.server_ver||'--'}`;$('st-user').innerText=`用户: ${r.user_name||'--'}`;st.sid=r.server_id;
  if(document.activeElement !== $('sync-cron-dash')) $('sync-cron-dash').value=r.sync_cron;
@@ -838,6 +838,7 @@ async function deleteDurationItemDirect(id, e){
         });
         if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
         toast(`✅ 已删除：${item.name||id}`);
+        poll();
     }catch(err){
         console.error(err);
         toast(`❌ 删除失败: ${err.message||err}`);
@@ -857,12 +858,13 @@ async function deleteItemDirect(id, e){
         });
         if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
         toast(`✅ 已删除：${item.name||id}`);
+        poll();
     }catch(err){
         console.error(err);
         toast(`❌ 删除失败: ${err.message||err}`);
     }
 }
-async function del() { const run=async()=>{const ids=Array.from(st.s);if(!ids.length)return;st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0);prepareDerivedData();st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden');toast('⚡ 正在执行删除...');await fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})})}; if(prefConfirmEnabled()) previewBatch('批量删除', run); else run() }
+async function del() { const run=async()=>{const ids=Array.from(st.s);if(!ids.length)return;st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0);prepareDerivedData();st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden');toast('⚡ 正在执行删除...');await fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});poll()}; if(prefConfirmEnabled()) previewBatch('批量删除', run); else run() }
 async function ignoreItems(){ const run=async()=>{const ids=Array.from(st.s); if(!ids.length){toast('❌ 未勾选');return} if(st.m==='duration'){ const selected=selectedItems(); const groupKeys=[...new Set(selected.map(x=>x.groupKey).filter(Boolean))]; if(!groupKeys.length){toast('❌ 未找到当前分组标识');return} const removeIds=[...new Set(selected.flatMap(x=>x.groupRaw?.items?.map(i=>i.emby_id)||[]))]; removeItemsFromState(removeIds); st.s.clear(); $('act-bar').classList.add('hidden'); toast('✅ 已忽略当前分组'); await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({group_keys: groupKeys, mode: st.m})}); return } st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0); prepareDerivedData(); st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden'); toast('✅ 已添加忽略'); await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids: ids, mode: st.m})}); }; if(prefConfirmEnabled()) previewBatch(st.m==='duration'?'批量忽略当前分组':'批量忽略', run); else await run() }
 async function refreshItems(){ const run=async()=>{const ids=Array.from(st.s);if(!ids.length){toast('❌ 未选中');return}toast('⏳ 指令下发中...');st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0);prepareDerivedData();st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden');const r=await fetch('/api/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});const res=await r.json();if(res.status==='ok')toast('✅ 指令已送达，后台正在热更新...');else toast('❌ 请求失败')}; if(prefConfirmEnabled()) previewBatch('批量刷新', run); else await run()}
 async function loadIgnored(){
