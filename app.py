@@ -640,9 +640,16 @@ async def background_silent_delete(ids, host, token):
                 s += sz
                 db.delete(i)
                 await wb_buffer.add(sz)
+        # 一次性提交：删除 + 统计更新，避免多次 commit 导致 session 状态混乱
+        cc = int(get_conf(db, "cleaned_count") or 0) + c
+        ss = int(get_conf(db, "saved_space") or 0) + s
+        cfg_cc = db.query(Config).filter(Config.key == "cleaned_count").first()
+        cfg_ss = db.query(Config).filter(Config.key == "saved_space").first()
+        if cfg_cc: cfg_cc.value = str(cc)
+        else: db.add(Config(key="cleaned_count", value=str(cc)))
+        if cfg_ss: cfg_ss.value = str(ss)
+        else: db.add(Config(key="saved_space", value=str(ss)))
         db.commit()
-        set_conf(db, "cleaned_count", str(int(get_conf(db, "cleaned_count") or 0) + c))
-        set_conf(db, "saved_space", str(int(get_conf(db, "saved_space") or 0) + s))
         if failed:
             preview = ', '.join([f"{eid}:{reason}" for eid, reason in failed[:5]])
             sys_log(f"[DELETE] ⚠️ 删除完成，成功 {c} 个，失败 {len(failed)} 个 -> {preview}")
