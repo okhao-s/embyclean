@@ -136,9 +136,19 @@ async def prune_missing_media_items(candidate_ids: List[str], trigger: str = "sc
         if not missing_ids:
             return 0
 
+        # 先收集孤儿记录的 size，再删除
+        orphan_items = db.query(MediaItem).filter(MediaItem.emby_id.in_(list(missing_ids))).all()
+        orphan_size = sum(getattr(i, 'size', 0) or 0 for i in orphan_items)
         deleted = db.query(MediaItem).filter(MediaItem.emby_id.in_(list(missing_ids))).delete(synchronize_session=False)
+        # 将孤儿记录的 size 也计入 saved_space，保证统计完整
+        if orphan_size > 0:
+            cfg_ss = db.query(Config).filter(Config.key == "saved_space").first()
+            if cfg_ss:
+                cfg_ss.value = str(int(cfg_ss.value or 0) + orphan_size)
+            else:
+                db.add(Config(key="saved_space", value=str(orphan_size)))
         db.commit()
-        sys_log(f"[PRUNE] 🧹 {trigger} 清掉 {deleted} 条远端已不存在的本地缓存")
+        sys_log(f"[PRUNE] 🧹 {trigger} 清掉 {deleted} 条远端已不存在的本地缓存 (含 {orphan_size/1048576:.1f} MB)")
         return deleted
     finally:
         db.close()
