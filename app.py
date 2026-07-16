@@ -147,6 +147,12 @@ async def prune_missing_media_items(candidate_ids: List[str], trigger: str = "sc
                 cfg_ss.value = str(int(cfg_ss.value or 0) + orphan_size)
             else:
                 db.add(Config(key="saved_space", value=str(orphan_size)))
+        # 同时更新 cleaned_count
+        cfg_cc = db.query(Config).filter(Config.key == "cleaned_count").first()
+        if cfg_cc:
+            cfg_cc.value = str(int(cfg_cc.value or 0) + deleted)
+        else:
+            db.add(Config(key="cleaned_count", value=str(deleted)))
         db.commit()
         sys_log(f"[PRUNE] 🧹 {trigger} 清掉 {deleted} 条远端已不存在的本地缓存 (含 {orphan_size/1048576:.1f} MB)")
         return deleted
@@ -649,7 +655,7 @@ async def background_silent_delete(ids, host, token):
                 sz = i.size or 0  # 防止 None 导致累加错误
                 s += sz
                 db.delete(i)
-                await wb_buffer.add(sz)
+                await wb_buffer.add(sz if sz > 0 else 0)
         # 一次性提交：删除 + 统计更新，避免多次 commit 导致 session 状态混乱
         cc = int(get_conf(db, "cleaned_count") or 0) + c
         ss = int(get_conf(db, "saved_space") or 0) + s
