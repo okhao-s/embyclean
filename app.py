@@ -37,20 +37,22 @@ def sys_log(msg: str): logger.info(msg)
 class WebhookBuffer:
     def __init__(self):
         self.count = 0; self.size = 0; self.timer_task = None; self.lock = asyncio.Lock()
-    async def add(self, size_bytes, db):
+    async def add(self, size_bytes):
         async with self.lock:
+            if size_bytes <= 0:
+                return
             self.count += 1; self.size += size_bytes
-            if not self.timer_task: self.timer_task = asyncio.create_task(self._flush_later(db))
-    async def _flush_later(self, db):
+            if not self.timer_task: self.timer_task = asyncio.create_task(self._flush_later())
+    async def _flush_later(self):
         await asyncio.sleep(5)
         async with self.lock:
-            if self.count > 0: await self._send(db)
+            if self.count > 0: await self._send()
             self.count = 0; self.size = 0; self.timer_task = None
-    async def _send(self, db):
+    async def _send(self):
         sz = f"{self.size/1048576:.2f} MB" if self.size < 1073741824 else f"{self.size/1073741824:.2f} GB"
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         msg = f"🛰️ **EmbyCleaner 任务报告**\n━━━━━━━━━━━━━━\n⏱️ 时间: {ts}\n📦 数量: {self.count} 个项目\n💾 空间: {sz}\n━━━━━━━━━━━━━━\n✅ 清理执行完毕"
-        await send_webhook(db, "清理完成", msg, raw=True)
+        await send_webhook_standalone("清理完成", msg, raw=True)
 
 wb_buffer = WebhookBuffer()
 
@@ -79,7 +81,10 @@ def log_status_once(key: str, message: str):
         sys_log(message)
 
 
-def utc_now_ts() -> float:
+def utc_now_ts() -> str:
+    return str(datetime.now(timezone.utc).timestamp())
+
+def utc_now_ts_float() -> float:
     return datetime.now(timezone.utc).timestamp()
 
 
@@ -183,13 +188,13 @@ async def perform_scan_async(mode: str, lib: str = "", param_s: str = "100", par
 
 async def execute_audit_task(db, task: AuditTask, trigger: str = "计划"):
     started_at = time.time()
-    task.last_run = str(utc_now_ts())
+    task.last_run = utc_now_ts()
     db.commit()
     findings = await perform_scan_async(task.mode, task.libraries)
     count = sum(len(f["items"]) for f in findings) if findings else 0
     task.last_found = count
     task.last_duration_ms = int((time.time() - started_at) * 1000)
-    if findings:
+    if count > 0:
         task.last_status = "matched"
         task.last_message = f"发现 {count} 个待处理项"
         db.commit()
@@ -251,6 +256,19 @@ async def get_token(db, force=False):
         global_token = ""
         log_status_once("auth_exception", f"[AUTH] ❌ Emby 登录异常: {e}")
     return ""
+
+async def _scheduled_sync():
+    try:
+        await do_sync("计划")
+    except Exception as e:
+        sys_log(f"[SCHED] ❌ 计划同步异常: {e}")
+
+async def send_webhook_standalone(command, detail, raw=False):
+    db = SessionLocal()
+    try:
+        await send_webhook(db, command, detail, raw)
+    finally:
+        db.close()
 
 async def send_webhook(db, command, detail, raw=False):
     url = get_conf(db, "webhook_url")
@@ -319,7 +337,7 @@ async def do_sync(trigger="手动"):
                     start_index += len(items)
                     if start_index >= total_count:
                         break
-            set_conf(db, "last_sync_ts", str(utc_now_ts()))
+            set_conf(db, "last_sync_ts", utc_now_ts())
             sys_log(f"[SYNC] ✅ 同步完成 (共 {tot} 条)")
             await send_webhook(db, "全量同步", f"入库 {tot} 条。")
             return True
@@ -335,7 +353,7 @@ async def delayed_single_update(ids: List[str], host: str, token: str):
     try:
         for eid in ids:
             try:
-                res = await emby_client(db).get(f"{host.rstrip('/')}/emby/Items", params={"Ids": eid, "Fields": "MediaSources,ImageTags,DateCreated"}, headers=emby_headers(token))
+                res = await emby_client(db).get(f"{host.rstrip('/')}/emby/Items", params={"Ids": eid, "Fields": "Path,MediaSources,ImageTags,DateCreated"}, headers=emby_headers(token))
                 if res.status_code == 200:
                     items = res.json().get("Items", [])
                     if items:
@@ -343,8 +361,14 @@ async def delayed_single_update(ids: List[str], host: str, token: str):
                         if local_item:
                             local_item.has_poster = "Primary" in item_data.get("ImageTags", {})
                             local_item.date_created = item_data.get("DateCreated", "") or local_item.date_created or ""
+                            local_item.path = item_data.get("Path", "") or local_item.path or ""
+                            local_item.name = item_data.get("Name", "") or local_item.name or ""
                             if item_data.get("MediaSources"):
-                                local_item.size = item_data["MediaSources"][0].get("Size", 0)
+                                src = item_data["MediaSources"][0]
+                                local_item.size = src.get("Size", 0)
+                                local_item.duration = src.get("RunTimeTicks", 0)
+                                if src.get("Width"):
+                                    local_item.resolution = src.get("Width", 0)
                             updated += 1
             except Exception as e:
                 sys_log(f"[UPDATE] ❌ 热更新失败 [{eid}]: {e}")
@@ -357,7 +381,7 @@ async def delayed_single_update(ids: List[str], host: str, token: str):
 async def scheduler_loop():
     global last_sync_trigger_slot
     while True:
-        now_ts = utc_now_ts()
+        now_ts = utc_now_ts_float()
         sleep_for = 60 - (now_ts % 60)
         if sleep_for <= 0 or sleep_for > 60:
             sleep_for = 60
@@ -365,7 +389,7 @@ async def scheduler_loop():
         db = SessionLocal()
         try:
             now = datetime.now().replace(second=0, microsecond=0)
-            now_ts = utc_now_ts()
+            now_ts = utc_now_ts_float()
             cs = get_conf(db, "cron_sync")
             current_slot = now.strftime("%Y-%m-%d %H:%M")
             if cs and cron_matches(cs, now):
@@ -374,7 +398,7 @@ async def scheduler_loop():
                     last_sync_trigger_slot = current_slot
                 elif last_sync_trigger_slot != current_slot:
                     last_sync_trigger_slot = current_slot
-                    asyncio.create_task(do_sync("计划"))
+                    asyncio.create_task(_scheduled_sync())
             ts = db.query(AuditTask).filter(AuditTask.enabled == True).all()
             for t in ts:
                 try:
@@ -655,7 +679,7 @@ async def background_silent_delete(ids, host, token):
                 sz = i.size or 0  # 防止 None 导致累加错误
                 s += sz
                 db.delete(i)
-                await wb_buffer.add(sz if sz > 0 else 0)
+                await wb_buffer.add(sz)
         # 一次性提交：删除 + 统计更新，避免多次 commit 导致 session 状态混乱
         cc = int(get_conf(db, "cleaned_count") or 0) + c
         ss = int(get_conf(db, "saved_space") or 0) + s
