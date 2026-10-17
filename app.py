@@ -74,7 +74,8 @@ REFRESH_CONCURRENCY = int(os.getenv("REFRESH_CONCURRENCY", "2"))
 DELETE_TIMEOUT = float(os.getenv("DELETE_TIMEOUT", "180"))
 # 单次请求上限，避免一次点几百个把 Emby 锁死
 DELETE_MAX_BATCH = int(os.getenv("DELETE_MAX_BATCH", "500"))
-# 后台删除任务表：/api/delete 立即返回 job_id，前端轮询 /api/delete/status 拿进度与真实成败
+# 后台操作任务表（delete / refresh 共用）：接口立即返回 job_id，
+# 前端轮询 /api/ops/status 拿进度与真实成败，多个任务可在前端叠加成一条进度条
 DELETE_JOBS: dict = {}
 DELETE_JOB_TTL = float(os.getenv("DELETE_JOB_TTL", "900"))
 DELETE_JOB_KEEP = 20
@@ -949,7 +950,7 @@ async def dele_post(r: DeleteRequest):
     _gc_delete_jobs()
     job_id = uuid.uuid4().hex[:12]
     DELETE_JOBS[job_id] = {
-        "job_id": job_id, "state": "running", "total": len(ids), "done": 0,
+        "job_id": job_id, "kind": "delete", "state": "running", "total": len(ids), "done": 0,
         "deleted": 0, "failed": [], "saved_bytes": 0, "removed_rows": 0,
         "started_at": time.time(), "finished_at": None, "message": "",
     }
@@ -957,8 +958,9 @@ async def dele_post(r: DeleteRequest):
     return ok(status="started", job_id=job_id, total=len(ids))
 
 
+@app.get("/api/ops/status")
 @app.get("/api/delete/status")
-def delete_status(job_id: str):
+def ops_status(job_id: str):
     job = DELETE_JOBS.get(job_id)
     if not job:
         return err(status="error", message="任务不存在或已过期")
@@ -1001,8 +1003,73 @@ def sync_p(b: BackgroundTasks):
 @app.post("/api/test_webhook")
 async def tw_p():
     db = SessionLocal(); await send_webhook(db, "测试", "链路正常。"); db.close(); return ok(status="ok")
+async def perform_refresh(ids, host, token, full_refresh=False, use_secure=True, job=None):
+    """执行刷新并返回真实成败；job 传入时顺带推进度。"""
+    # 默认只做「按需刷新」：Recursive=false、Default 模式、不替换图片/元数据。
+    # 旧实现固定 Recursive=true + FullRefresh + ReplaceAllImages/Metadata：
+    # 每选一个条目就让 Emby 全量重刮并重新下载图片，几十个一起点会把 Emby 的
+    # 元数据队列和 SQLite 压得很重。
+    if full_refresh:
+        query = "Recursive=true&ImageRefreshMode=FullRefresh&MetadataRefreshMode=FullRefresh&ReplaceAllImages=true&ReplaceAllMetadata=true"
+    else:
+        query = "Recursive=false&ImageRefreshMode=Default&MetadataRefreshMode=Default&ReplaceAllImages=false&ReplaceAllMetadata=false"
+
+    http_client = client if use_secure else insecure_client
+    sem = asyncio.Semaphore(REFRESH_CONCURRENCY)
+    base = host.rstrip('/')
+
+    async def refresh_one(eid):
+        async with sem:
+            await asyncio.sleep(0.2)  # 轻微错峰，别让 Emby 同时处理一堆刷新
+            try:
+                resp = await http_client.post(f"{base}/Items/{eid}/Refresh?{query}",
+                                              headers=emby_headers(token), timeout=30.0)
+                reason = None if resp.status_code in (200, 204) else f"HTTP {resp.status_code}"
+            except Exception as e:
+                reason = f"{type(e).__name__}: {e}"
+            if job is not None:
+                job["done"] = job.get("done", 0) + 1
+                if reason is None:
+                    job["deleted"] = job.get("deleted", 0) + 1  # 复用同一字段表示“成功数”
+                else:
+                    job["failed"].append({"id": eid, "reason": reason})
+            return eid, reason
+
+    outcomes = await asyncio.gather(*[refresh_one(x) for x in ids])
+    ok_ids = [eid for eid, reason in outcomes if reason is None]
+    failed = [(eid, reason) for eid, reason in outcomes if reason is not None]
+    if failed:
+        preview = ', '.join(f"{eid}:{reason}" for eid, reason in failed[:5])
+        sys_log(f"[REFRESH] ⚠️ 成功 {len(ok_ids)} 个，失败 {len(failed)} 个 -> {preview}")
+    else:
+        sys_log(f"[REFRESH] 🔄 刷新指令已下发 {len(ok_ids)} 个（{'全量重刮' if full_refresh else '按需刷新'}）")
+    return {"success": len(ok_ids), "failed": [{"id": eid, "reason": reason} for eid, reason in failed],
+            "ok_ids": ok_ids, "mode": "full" if full_refresh else "default"}
+
+
+async def run_refresh_job(job_id, ids, host, token, full_refresh, use_secure):
+    job = DELETE_JOBS[job_id]
+    try:
+        result = await perform_refresh(ids, host, token, full_refresh, use_secure, job)
+        job.update({
+            "state": "done",
+            "deleted": result["success"],
+            "failed": result["failed"],
+            "done": len(ids),
+            "mode": result["mode"],
+        })
+        if result["ok_ids"]:
+            # 刷新后延迟校准本地缓存（后台，不阻塞进度条）
+            asyncio.create_task(delayed_single_update(result["ok_ids"], host, token))
+    except Exception as e:
+        job.update({"state": "error", "message": f"{type(e).__name__}: {e}"})
+        sys_log(f"[REFRESH] ❌ 任务 {job_id} 异常: {e}")
+    finally:
+        job["finished_at"] = time.time()
+
+
 @app.post("/api/refresh")
-async def refresh_p(r: RefreshRequest, b: BackgroundTasks):
+async def refresh_p(r: RefreshRequest):
     ids = [str(x).strip() for x in (r.ids or []) if str(x).strip()]
     db = SessionLocal()
     try:
@@ -1018,44 +1085,12 @@ async def refresh_p(r: RefreshRequest, b: BackgroundTasks):
     if len(ids) > REFRESH_MAX_BATCH:
         return err(status="error", message=f"一次最多刷新 {REFRESH_MAX_BATCH} 个，请分批操作")
 
-    # 默认只做「按需刷新」：Recursive=false、Default 模式、不替换图片/元数据。
-    # 旧实现固定 Recursive=true + FullRefresh + ReplaceAllImages/Metadata：
-    # 每选一个条目就让 Emby 全量重刮并重新下载图片，几十个一起点能把 Emby 的
-    # 元数据队列和 SQLite 直接压死（表现为 Emby 卡死、面板一直转圈）。
-    if full_refresh:
-        query = "Recursive=true&ImageRefreshMode=FullRefresh&MetadataRefreshMode=FullRefresh&ReplaceAllImages=true&ReplaceAllMetadata=true"
-    else:
-        query = "Recursive=false&ImageRefreshMode=Default&MetadataRefreshMode=Default&ReplaceAllImages=false&ReplaceAllMetadata=false"
-
-    http_client = client if use_secure else insecure_client
-    sem = asyncio.Semaphore(REFRESH_CONCURRENCY)
-    ok_ids, failed = [], []
-
-    async def refresh_one(eid):
-        async with sem:
-            await asyncio.sleep(0.2)  # 轻微错峰，别让 Emby 同时处理一堆刷新
-            try:
-                resp = await http_client.post(f"{h.rstrip('/')}/Items/{eid}/Refresh?{query}",
-                                              headers=emby_headers(t), timeout=30.0)
-                if resp.status_code in (200, 204):
-                    return eid, None
-                return eid, f"HTTP {resp.status_code}"
-            except Exception as e:
-                return eid, f"{type(e).__name__}: {e}"
-
-    outcomes = await asyncio.gather(*[refresh_one(x) for x in ids])
-    for eid, reason in outcomes:
-        if reason is None:
-            ok_ids.append(eid)
-        else:
-            failed.append((eid, reason))
-    if failed:
-        preview = ', '.join(f"{eid}:{reason}" for eid, reason in failed[:5])
-        sys_log(f"[REFRESH] ⚠️ 成功 {len(ok_ids)} 个，失败 {len(failed)} 个 -> {preview}")
-    else:
-        sys_log(f"[REFRESH] 🔄 刷新指令已下发 {len(ok_ids)} 个（{'全量重刮' if full_refresh else '按需刷新'}）")
-    if ok_ids:
-        b.add_task(delayed_single_update, ok_ids, h, t)
-    return {"status": "ok", "success": len(ok_ids), "fail": len(failed),
-            "failed": [{"id": eid, "reason": reason} for eid, reason in failed],
-            "mode": "full" if full_refresh else "default"}
+    _gc_delete_jobs()
+    job_id = uuid.uuid4().hex[:12]
+    DELETE_JOBS[job_id] = {
+        "job_id": job_id, "kind": "refresh", "state": "running", "total": len(ids), "done": 0,
+        "deleted": 0, "failed": [], "saved_bytes": 0, "removed_rows": 0,
+        "started_at": time.time(), "finished_at": None, "message": "",
+    }
+    asyncio.create_task(run_refresh_job(job_id, ids, h, t, full_refresh, use_secure))
+    return ok(status="started", job_id=job_id, total=len(ids), mode="full" if full_refresh else "default")
