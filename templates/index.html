@@ -211,6 +211,12 @@ body { background: var(--bg-main); color: var(--text-main); font-family: var(--f
 
 input { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border); padding: 10px; border-radius: 8px; color: var(--text-strong); outline: none; transition: 0.2s; font-size: 13px; }
 #toast-box { position: fixed; top: 24px; right: 24px; z-index: 100; display: flex; flex-direction: column; gap: 8px; }
+/* 左上角操作进度：只显示整体进度条，不逐条刷条目 */
+#op-progress { position: fixed; top: 20px; left: 20px; z-index: 120; width: 260px; background: rgba(15,23,42,0.92); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; backdrop-filter: blur(10px); box-shadow: 0 10px 25px -10px rgba(0,0,0,0.6); display: none; }
+#op-progress.open { display: block; }
+.op-progress-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 11px; color: var(--text-soft); font-weight: bold; margin-bottom: 8px; gap: 8px; }
+.op-progress-track { height: 6px; background: rgba(255,255,255,0.08); border-radius: 999px; overflow: hidden; }
+.op-progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg,#38bdf8,#818cf8); border-radius: 999px; transition: width .25s ease; }
 .toast { background: rgba(15, 23, 42, 0.9); border-left: 4px solid #38bdf8; color: var(--text-strong); padding: 12px 20px; border-radius: 8px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3); backdrop-filter: blur(10px); font-size: 13px; }
 .page { display: none; width: 100%; animation: fadePage 0.3s ease; } .page.active { display: block; }
 @keyframes fadePage { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
@@ -329,7 +335,8 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
 .bg-white\/5 { background: var(--panel-3) !important; }
 .border-white\/5, .border-white\/10 { border-color: var(--border-soft) !important; }
 </style></head><body data-theme="obsidian">
-<div id="loader" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] hidden items-center justify-center"><div class="w-12 h-12 border-4 border-sky-500 border-t-transparent rounded-full animate-spin"></div></div><div id="toast-box"></div>
+<div id="loader" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] hidden items-center justify-center"><div class="w-12 h-12 border-4 border-sky-500 border-t-transparent rounded-full animate-spin"></div></div><div id="op-progress"><div class="op-progress-head"><span id="op-progress-text">处理中 0/0</span><span id="op-progress-pct">0%</span></div><div class="op-progress-track"><div id="op-progress-fill" class="op-progress-fill"></div></div></div>
+<div id="toast-box"></div>
 
 <div id="conf-modal"><div class="modal-card text-center">
     <div id="conf-icon" class="text-6xl mb-6">⚠️</div>
@@ -530,6 +537,29 @@ $('content-area').addEventListener('scroll', () => {
     }
 });
 
+let opTimer=null;
+function opShow(label,total){$('op-progress-text').innerText=`${label} 0/${total}`;$('op-progress-pct').innerText='0%';$('op-progress-fill').style.width='0%';$('op-progress').classList.add('open')}
+function opUpdate(label,done,total,extra){const pct=total?Math.min(100,Math.round(done*100/total)):0;$('op-progress-text').innerText=`${label} ${done}/${total}${extra||''}`;$('op-progress-pct').innerText=pct+'%';$('op-progress-fill').style.width=pct+'%'}
+function opHide(delay){clearTimeout(opTimer);opTimer=setTimeout(()=>$('op-progress').classList.remove('open'),delay===undefined?1000:delay)}
+// 删除走后端后台任务：立即返回 job_id，这里轮询进度；只刷整体进度条，不逐条提示
+async function runDeleteJob(ids,label){
+  label=label||'🗑️ 删除中';
+  const resp=await fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});
+  const data=await resp.json().catch(()=>({}));
+  if(!resp.ok) throw new Error(data.detail||data.message||`HTTP ${resp.status}`);
+  if(data.status!=='started') throw new Error(data.message||'删除未启动');
+  const jobId=data.job_id,total=data.total||ids.length;
+  opShow(label,total);
+  for(;;){
+    await new Promise(r=>setTimeout(r,600));
+    const r2=await fetch('/api/delete/status?job_id='+encodeURIComponent(jobId));
+    const s2=await r2.json().catch(()=>({}));
+    if(s2.status!=='ok'||!s2.job) throw new Error(s2.message||'任务状态丢失');
+    const job=s2.job;
+    opUpdate(label,job.done,job.total,(job.failed&&job.failed.length)?` · 失败 ${job.failed.length}`:'');
+    if(job.state!=='running'){opHide(800);return job}
+  }
+}
 function toast(msg){const t=document.createElement('div');t.className='toast';t.innerText=msg;$('toast-box').appendChild(t);setTimeout(()=>{t.remove()},3500)}
 function getScanBtn(){return document.querySelector(SCAN_BTN_SELECTOR)}
 function setScanBusy(busy){const btn=getScanBtn(); st.scanBusy=busy; if(!btn)return; if(!st.scanBtnText) st.scanBtnText=btn.innerText; btn.disabled=busy; btn.classList.toggle('opacity-60', busy); btn.classList.toggle('cursor-not-allowed', busy); btn.innerText=busy?'⏳ 扫描中...':(st.scanBtnText||'🔍 开始扫描')}
@@ -833,24 +863,17 @@ async function deleteDurationItemDirect(id, e){
     if(!item){toast('❌ 条目不存在');return}
     return deleteOneConfirmed(id, item);
 }
-// 单条删除：等服务端确认删成功再更新界面，失败就报错并保留条目
+// 单条删除：走后端任务并轮询，成功才从界面移除
 async function deleteOneConfirmed(id, item){
-    toast(`⚡ 正在删除：${item.name||id}`);
     try{
-        const resp = await fetch('/api/delete',{
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({ids:[id]})
-        });
-        const data = await resp.json().catch(()=>({}));
-        if(!resp.ok) throw new Error(data.detail||data.message||`HTTP ${resp.status}`);
-        const failed = (data.failed||[])[0];
+        const job = await runDeleteJob([id]);
+        const failed = (job.failed||[])[0];
         if(failed) throw new Error(failed.reason||'删除失败');
         removeItemsFromState([id]);
         toast(`✅ 已删除：${item.name||id}`);
         poll();
     }catch(err){
-        console.error(err);
+        opHide(0);
         toast(`❌ 删除失败: ${err.message||err}`);
     }
 }
@@ -860,7 +883,7 @@ async function deleteItemDirect(id, e){
     if(!item){toast('❌ 条目不存在');return}
     return deleteOneConfirmed(id, item);
 }
-async function del() { const run=async()=>{const ids=Array.from(st.s);if(!ids.length)return;toast('⚡ 正在执行删除...');try{const resp=await fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});const data=await resp.json().catch(()=>({}));if(!resp.ok){toast(`❌ 删除失败: ${data.detail||data.message||('HTTP '+resp.status)}`);return}const failed=data.failed||[];const failedIds=new Set(failed.map(f=>f.id));const done=ids.filter(id=>!failedIds.has(id));if(done.length)removeItemsFromState(done);st.s.clear(); $('act-bar').classList.add('hidden');if(failed.length){toast(`⚠️ 成功 ${data.deleted||0} 个，失败 ${failed.length} 个：${failed[0].reason||''}`)}else{toast(`✅ 已删除 ${data.deleted||0} 个`)}poll()}catch(err){toast(`❌ 删除请求失败: ${err.message||err}`)}}; if(prefConfirmEnabled()) previewBatch('批量删除', run); else run() }
+async function del() { const run=async()=>{const ids=Array.from(st.s);if(!ids.length)return;try{const job=await runDeleteJob(ids);const failedIds=new Set((job.failed||[]).map(f=>f.id));const done=ids.filter(id=>!failedIds.has(id));if(done.length)removeItemsFromState(done);st.s.clear();$('act-bar').classList.add('hidden');if(job.state==='timeout'||job.state==='error'){toast(`⚠️ ${job.message||'删除未完成，请重新扫描核对'}`)}else if((job.failed||[]).length){toast(`⚠️ 成功 ${job.deleted} 个，失败 ${job.failed.length} 个：${job.failed[0].reason||''}`)}else{toast(`✅ 已删除 ${job.deleted} 个`)}poll()}catch(err){opHide(0);toast(`❌ 删除失败: ${err.message||err}`)}}; if(prefConfirmEnabled()) previewBatch('批量删除', run); else run() }
 async function ignoreItems(){ const run=async()=>{const ids=Array.from(st.s); if(!ids.length){toast('❌ 未勾选');return} if(st.m==='duration'){ const selected=selectedItems(); const groupKeys=[...new Set(selected.map(x=>x.groupKey).filter(Boolean))]; if(!groupKeys.length){toast('❌ 未找到当前分组标识');return} const removeIds=[...new Set(selected.flatMap(x=>x.groupRaw?.items?.map(i=>i.emby_id)||[]))]; removeItemsFromState(removeIds); st.s.clear(); $('act-bar').classList.add('hidden'); toast('✅ 已忽略当前分组'); await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({group_keys: groupKeys, mode: st.m})}); return } st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0); prepareDerivedData(); st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden'); toast('✅ 已添加忽略'); await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids: ids, mode: st.m})}); }; if(prefConfirmEnabled()) previewBatch(st.m==='duration'?'批量忽略当前分组':'批量忽略', run); else await run() }
 async function refreshItems(){ const run=async()=>{const ids=Array.from(st.s);if(!ids.length){toast('❌ 未选中');return}toast('⏳ 指令下发中...');st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0);prepareDerivedData();st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden');const r=await fetch('/api/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});const res=await r.json();if(res.status==='ok'){toast(res.fail?`⚠️ 已下发 ${res.success} 个，失败 ${res.fail} 个：${(res.failed&&res.failed[0]&&res.failed[0].reason)||''}`:`✅ 已下发 ${res.success} 个刷新（${res.mode==='full'?'全量重刮':'按需刷新'}）`)}else{toast(`❌ 刷新失败: ${res.message||'请求失败'}`)}}; if(prefConfirmEnabled()) previewBatch('批量刷新', run); else await run()}
 async function loadIgnored(){

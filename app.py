@@ -1,4 +1,4 @@
-import os, re, logging, asyncio, httpx, time, collections
+import os, re, logging, asyncio, httpx, time, collections, uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
@@ -74,6 +74,10 @@ REFRESH_CONCURRENCY = int(os.getenv("REFRESH_CONCURRENCY", "2"))
 DELETE_TIMEOUT = float(os.getenv("DELETE_TIMEOUT", "180"))
 # 单次请求上限，避免一次点几百个把 Emby 锁死
 DELETE_MAX_BATCH = int(os.getenv("DELETE_MAX_BATCH", "500"))
+# 后台删除任务表：/api/delete 立即返回 job_id，前端轮询 /api/delete/status 拿进度与真实成败
+DELETE_JOBS: dict = {}
+DELETE_JOB_TTL = float(os.getenv("DELETE_JOB_TTL", "900"))
+DELETE_JOB_KEEP = 20
 REFRESH_MAX_BATCH = int(os.getenv("REFRESH_MAX_BATCH", "200"))
 STATUS_LOG_INTERVAL = 300
 # /api/status 远端探测缓存（秒）：前端 5s 轮询一次，没有缓存会把 Emby 打满
@@ -820,7 +824,7 @@ async def _delete_one(client, base, eid, token, sem):
         return eid, last_reason
 
 
-async def perform_delete(ids, host, token):
+async def perform_delete(ids, host, token, job=None):
     """真正执行删除并把结果回给调用方，而不是默默吞掉。
 
     旧实现用 BackgroundTasks 异步删，接口永远返回 started，前端拿不到成败，
@@ -839,7 +843,18 @@ async def perform_delete(ids, host, token):
         client = emby_client(db)
         base = host.rstrip('/')
         sem = asyncio.Semaphore(DELETE_CONCURRENCY)
-        outcomes = await asyncio.gather(*[_delete_one(client, base, eid, token, sem) for eid in ids])
+
+        async def one(eid):
+            outcome = await _delete_one(client, base, eid, token, sem)
+            if job is not None:
+                job["done"] = job.get("done", 0) + 1
+                if outcome[1] is None:
+                    job["deleted"] = job.get("deleted", 0) + 1
+                else:
+                    job["failed"].append({"id": outcome[0], "reason": outcome[1]})
+            return outcome
+
+        outcomes = await asyncio.gather(*[one(eid) for eid in ids])
 
         ok_ids = [eid for eid, reason in outcomes if reason is None]
         failed = [(eid, reason) for eid, reason in outcomes if reason is not None]
@@ -884,8 +899,46 @@ async def background_silent_delete(ids, host, token):
     return res
 
 
+def _gc_delete_jobs():
+    """清掉过期/超量的任务记录，防止内存无限增长。"""
+    now = time.time()
+    for jid, job in list(DELETE_JOBS.items()):
+        if job["state"] != "running" and now - job.get("finished_at", now) > DELETE_JOB_TTL:
+            DELETE_JOBS.pop(jid, None)
+    while len(DELETE_JOBS) > DELETE_JOB_KEEP:
+        oldest = min(DELETE_JOBS.items(), key=lambda kv: kv[1]["started_at"])[0]
+        DELETE_JOBS.pop(oldest, None)
+
+
+async def run_delete_job(job_id, ids, host, token):
+    job = DELETE_JOBS[job_id]
+    try:
+        result = await asyncio.wait_for(perform_delete(ids, host, token, job), timeout=DELETE_TIMEOUT)
+        job.update({
+            "state": "done",
+            "deleted": result["deleted"],
+            "failed": result["failed"],
+            "saved_bytes": result["saved_bytes"],
+            "removed_rows": result["removed_rows"],
+            "done": result["requested"],
+        })
+        if result["deleted"] > 0:
+            await wb_buffer.add(result["saved_bytes"])
+    except asyncio.TimeoutError:
+        job.update({"state": "timeout", "message": f"删除超时（>{DELETE_TIMEOUT}s），请重新扫描核对结果"})
+        sys_log(f"[DELETE] ⚠️ 任务 {job_id} 超时，已发出的请求可能仍在 Emby 侧执行")
+    except Exception as e:
+        job.update({"state": "error", "message": f"{type(e).__name__}: {e}"})
+        sys_log(f"[DELETE] ❌ 任务 {job_id} 异常: {e}")
+    finally:
+        job["finished_at"] = time.time()
+
+
 @app.post("/api/delete")
 async def dele_post(r: DeleteRequest):
+    ids = [str(x).strip() for x in (r.ids or []) if str(x).strip()][:DELETE_MAX_BATCH]
+    if not ids:
+        return err(status="error", message="没有要删除的条目")
     db = SessionLocal()
     try:
         h, t = get_conf(db, "host"), await get_token(db)
@@ -893,14 +946,23 @@ async def dele_post(r: DeleteRequest):
         db.close()
     if not h or not t:
         raise HTTPException(status_code=400, detail="Emby 未配置或认证失败")
-    try:
-        result = await asyncio.wait_for(perform_delete(r.ids, h, t), timeout=DELETE_TIMEOUT)
-    except asyncio.TimeoutError:
-        sys_log(f"[DELETE] ⚠️ 删除超时(>{DELETE_TIMEOUT}s)，已发出的请求可能仍在 Emby 侧执行，请稍后重新扫描核对")
-        raise HTTPException(status_code=504, detail=f"删除超时（>{DELETE_TIMEOUT}s），请稍后重新扫描核对结果")
-    if result["deleted"] > 0:
-        await wb_buffer.add(result["saved_bytes"])
-    return ok(status="ok", **result)
+    _gc_delete_jobs()
+    job_id = uuid.uuid4().hex[:12]
+    DELETE_JOBS[job_id] = {
+        "job_id": job_id, "state": "running", "total": len(ids), "done": 0,
+        "deleted": 0, "failed": [], "saved_bytes": 0, "removed_rows": 0,
+        "started_at": time.time(), "finished_at": None, "message": "",
+    }
+    asyncio.create_task(run_delete_job(job_id, ids, h, t))
+    return ok(status="started", job_id=job_id, total=len(ids))
+
+
+@app.get("/api/delete/status")
+def delete_status(job_id: str):
+    job = DELETE_JOBS.get(job_id)
+    if not job:
+        return err(status="error", message="任务不存在或已过期")
+    return {"status": "ok", "job": job}
 
 @app.get("/api/logs")
 def logs_g(since: Optional[int] = None):
