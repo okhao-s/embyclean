@@ -50,6 +50,8 @@ class MediaItem(Base):
     tag_c = Column(Boolean, default=False)
     tag_uc = Column(Boolean, default=False)
     tag_u = Column(Boolean, default=False)
+    # 大库去重按 Emby 的 ProviderIds.Tmdb 分组；空串表示 Emby 端没有 TMDB 标识
+    tmdb_id = Column(String, default="")
 
 engine = create_engine(DB_PATH, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -71,6 +73,9 @@ def init_db():
                 con.execute(text("ALTER TABLE media_items ADD COLUMN duration FLOAT DEFAULT 0"))
             if "date_created" not in cols:
                 con.execute(text("ALTER TABLE media_items ADD COLUMN date_created VARCHAR DEFAULT ''"))
+            if "tmdb_id" not in cols:
+                con.execute(text("ALTER TABLE media_items ADD COLUMN tmdb_id VARCHAR DEFAULT ''"))
+            con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_tmdb_id ON media_items(tmdb_id)"))
             con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_library_id ON media_items(library_id)"))
             con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_size ON media_items(size)"))
             con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_duration ON media_items(duration)"))

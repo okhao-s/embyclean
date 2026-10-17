@@ -1,14 +1,17 @@
 import hashlib
 import json
+import logging
 import os
 import re
 from decimal import Decimal, ROUND_HALF_UP
 from sqlalchemy import func
 from core.db import MediaItem, IgnoredItem, get_conf
 
+logger = logging.getLogger("EmbyCleaner.scanner")
+
 MODE_MAP = {
     "av": "番号查重",
-    "smart": "智能洗版",
+    "smart": "大库去重",
     "size": "同大查重",
     "duration": "时长查重",
     "noposter": "缺失封面",
@@ -214,11 +217,36 @@ def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0", dura
         rows = _duration_candidate_items_query(db, ignored, duration_precision, lib_ids).all()
         grouped = _group_duration_duplicates(rows, ignored_group_keys, duration_scope, duration_precision)
     elif mode == "smart":
-        sub = db.query(MediaItem.name).group_by(MediaItem.name).having(func.count(MediaItem.id) > 1)
-        rows = q.filter(MediaItem.name.in_(sub)).all(); grp = {}
+        # 大库去重：按 Emby 的 ProviderIds.Tmdb 分组，同一个 TMDB ID 出现多次就是重复件
+        # （同一部片子在不同库里各存一份、或者同一库里留了多版本都会被归到一组）。
+        # 没有 TMDB 标识的条目不参与，避免像旧版那样按名字误判。
+        sub = (
+            db.query(MediaItem.tmdb_id)
+            .filter(MediaItem.tmdb_id.isnot(None), MediaItem.tmdb_id != "")
+            .group_by(MediaItem.tmdb_id)
+            .having(func.count(MediaItem.id) > 1)
+        )
+        rows = q.filter(MediaItem.tmdb_id.in_(sub)).all()
+        no_tmdb = q.filter((MediaItem.tmdb_id == "") | (MediaItem.tmdb_id.is_(None))).count()
+        if no_tmdb:
+            logger.info(f"[DEDUPE] 有 {no_tmdb} 个媒体项没有 TMDB 标识，未参与大库去重（可在 Emby 里刷新元数据补齐）")
+        grp = {}
         for r in rows:
-            grp.setdefault(r.name, []).append(r)
-        grouped = [{"title": k, "items": v} for k, v in grp.items()]
+            grp.setdefault(r.tmdb_id, []).append(r)
+        grouped = []
+        for tmdb_id, members in grp.items():
+            title_name = next((m.name for m in members if m.name), tmdb_id)
+            libs = {m.library_id for m in members if m.library_id}
+            grouped.append({
+                "title": f"🎬 TMDB {tmdb_id} · {title_name}",
+                "items": members,
+                "group_meta": {
+                    "tmdb_id": tmdb_id,
+                    "member_count": len(members),
+                    "library_count": len(libs),
+                    "library_ids": sorted(libs),
+                },
+            })
     elif mode == "tiny":
         sq = q.filter(MediaItem.size < float(param_s) * 1e6, MediaItem.size > 0)
         if float(param_d) > 0:

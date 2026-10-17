@@ -320,7 +320,7 @@ async def do_sync(trigger="手动"):
             for l in libs:
                 lib_id = l['Id']; lib_name = l.get('Name', 'Unknown'); current_sync_lib = lib_name; start_index = 0
                 while True:
-                    params = {"ParentId": lib_id, "Recursive": "true", "IncludeItemTypes": "Movie,Video,Series", "Fields": "Path,MediaSources,ImageTags,DateCreated", "StartIndex": start_index, "Limit": 1000}
+                    params = {"ParentId": lib_id, "Recursive": "true", "IncludeItemTypes": "Movie,Video,Series", "Fields": "Path,MediaSources,ImageTags,DateCreated,ProviderIds", "StartIndex": start_index, "Limit": 1000}
                     try:
                         res_items = await emby_client(db).get(f"{h.rstrip('/')}/emby/Items", params=params, headers=emby_headers(t))
                         if res_items.status_code != 200:
@@ -347,7 +347,8 @@ async def do_sync(trigger="手动"):
                             if ms.get("MediaStreams"):
                                 w = ms["MediaStreams"][0].get("Width", 0)
                         c, uc, u = scanner_service.decorate_media_flags(path, i.get('Name', ''))
-                        buf.append(MediaItem(emby_id=i["Id"], name=i.get("Name", ""), path=path, resolution=w, size=s, duration=d, has_poster="Primary" in i.get("ImageTags", {}), library_id=lib_id, date_created=date_created, tag_c=c, tag_uc=uc, tag_u=u))
+                        tmdb_id = str((i.get("ProviderIds") or {}).get("Tmdb") or "").strip()
+                        buf.append(MediaItem(emby_id=i["Id"], name=i.get("Name", ""), path=path, resolution=w, size=s, duration=d, has_poster="Primary" in i.get("ImageTags", {}), library_id=lib_id, date_created=date_created, tag_c=c, tag_uc=uc, tag_u=u, tmdb_id=tmdb_id))
                     if buf:
                         db.bulk_save_objects(buf); db.commit(); tot += len(buf)
                     sys_log(f"[SYNC] ⏳ 索引 [{lib_name}]: {min(start_index + len(items), total_count)} / {total_count}")
@@ -370,7 +371,7 @@ async def delayed_single_update(ids: List[str], host: str, token: str):
     try:
         for eid in ids:
             try:
-                res = await emby_client(db).get(f"{host.rstrip('/')}/emby/Items", params={"Ids": eid, "Fields": "Path,MediaSources,ImageTags,DateCreated"}, headers=emby_headers(token))
+                res = await emby_client(db).get(f"{host.rstrip('/')}/emby/Items", params={"Ids": eid, "Fields": "Path,MediaSources,ImageTags,DateCreated,ProviderIds"}, headers=emby_headers(token))
                 if res.status_code == 200:
                     items = res.json().get("Items", [])
                     if items:
@@ -380,6 +381,10 @@ async def delayed_single_update(ids: List[str], host: str, token: str):
                             local_item.date_created = item_data.get("DateCreated", "") or local_item.date_created or ""
                             local_item.path = item_data.get("Path", "") or local_item.path or ""
                             local_item.name = item_data.get("Name", "") or local_item.name or ""
+                            # 刷新后 TMDB 标识可能才补上，跟着校准，否则大库去重会漏掉它
+                            tmdb_id = str((item_data.get("ProviderIds") or {}).get("Tmdb") or "").strip()
+                            if tmdb_id:
+                                local_item.tmdb_id = tmdb_id
                             if item_data.get("MediaSources"):
                                 src = item_data["MediaSources"][0]
                                 local_item.size = src.get("Size", 0)

@@ -386,7 +386,7 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
    <div class="card"><h2 class="text-xl font-bold mb-6 text-white">2. 扫描模式</h2>
     <div class="mode-grid mb-8">
      <button class="mode-btn" onclick="mode('av',this)"><span class="mode-icon">🔞</span><span class="text-xs font-bold">番号查重</span></button>
-     <button class="mode-btn" onclick="mode('smart',this)"><span class="mode-icon">🧠</span><span class="text-xs font-bold">智能洗版</span></button>
+     <button class="mode-btn" onclick="mode('smart',this)"><span class="mode-icon">🎬</span><span class="text-xs font-bold">大库去重</span></button>
      <button class="mode-btn" onclick="mode('size',this)"><span class="text-4xl">⚖️</span><span class="text-xs font-bold">同大查重</span></button>
      <button class="mode-btn" onclick="mode('duration',this)"><span class="mode-icon">⏳</span><span class="text-xs font-bold">时长查重</span></button>
      <button class="mode-btn" onclick="mode('noposter',this)"><span class="mode-icon">🖼️</span><span class="text-xs font-bold">缺失封面</span></button>
@@ -458,7 +458,7 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
           <div><label class="block text-[11px] text-slate-400 mb-2">番号推荐规则</label><select id="pref-av" class="text-xs p-3"><option value="tag_uc">选 [UC]</option><option value="tag_c">选 [C]</option><option value="tag_raw">选原版</option></select></div>
           <div><label class="block text-[11px] text-slate-400 mb-2">同大推荐规则</label><select id="pref-size" class="text-xs p-3"><option value="path_long">最长径</option><option value="path_short">最短径</option><option value="name_long">最长名</option><option value="name_short">最短名</option></select></div>
           <div><label class="block text-[11px] text-slate-400 mb-2">时长重复推荐规则</label><select id="pref-duration" class="text-xs p-3"><option value="min">选最小文件</option><option value="max">选最大文件</option></select></div>
-          <div><label class="block text-[11px] text-slate-400 mb-2">智能洗版推荐规则</label><select id="pref-smart" class="text-xs p-3"><option value="reso_max">最高分辨率</option><option value="reso_min">最低分辨率</option></select></div>
+          <div><label class="block text-[11px] text-slate-400 mb-2">大库去重推荐规则</label><select id="pref-smart" class="text-xs p-3"><option value="reso_max">最高分辨率</option><option value="reso_min">最低分辨率</option></select></div>
         </div>
         <label class="flex items-center gap-3 mt-4 text-xs text-slate-300"><input type="checkbox" id="pref-confirm" class="w-4 h-4 accent-sky-500"> 批量删除/忽略/刷新前先预览</label>
      </div>
@@ -466,7 +466,7 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
    </div>
    <div class="flex flex-col gap-10 h-full">
       <div class="card h-fit flex-1"><h2 class="text-xl font-bold mb-6 text-white border-b border-white/10 pb-4">计划任务</h2><div id="task-list" class="space-y-4 max-h-[400px] overflow-y-auto pr-2"></div></div>
-      <div class="card h-fit flex-1"><h2 class="text-xl font-bold mb-6 text-white border-b border-white/10 pb-4">黑名单管理</h2><div class="grid grid-cols-[1fr,140px] gap-3 mb-4"><input id="ignore-search" class="text-xs p-3" placeholder="搜索名称 / Emby ID" oninput="loadIgnored()"><select id="ignore-mode-filter" class="text-xs p-3" onchange="loadIgnored()"><option value="">全部模式</option><option value="av">番号</option><option value="smart">洗版</option><option value="size">同大</option><option value="duration">时长</option><option value="tiny">极小</option><option value="noposter">封面</option><option value="global">全局</option></select></div><div class="flex gap-3 mb-6"><button class="btn btn-g text-xs py-2 px-4" onclick="ignBatch(true)">全选</button><button class="btn btn-g text-xs py-2 px-4" onclick="ignBatch(false)">全不选</button><button class="btn btn-p text-xs ml-auto font-bold py-2 px-6" onclick="ignRestoreBulk()">♻️ 恢复</button></div><div id="ignore-list" class="space-y-4 max-h-[380px] overflow-y-auto pr-2"></div></div>
+      <div class="card h-fit flex-1"><h2 class="text-xl font-bold mb-6 text-white border-b border-white/10 pb-4">黑名单管理</h2><div class="grid grid-cols-[1fr,140px] gap-3 mb-4"><input id="ignore-search" class="text-xs p-3" placeholder="搜索名称 / Emby ID" oninput="loadIgnored()"><select id="ignore-mode-filter" class="text-xs p-3" onchange="loadIgnored()"><option value="">全部模式</option><option value="av">番号</option><option value="smart">去重</option><option value="size">同大</option><option value="duration">时长</option><option value="tiny">极小</option><option value="noposter">封面</option><option value="global">全局</option></select></div><div class="flex gap-3 mb-6"><button class="btn btn-g text-xs py-2 px-4" onclick="ignBatch(true)">全选</button><button class="btn btn-g text-xs py-2 px-4" onclick="ignBatch(false)">全不选</button><button class="btn btn-p text-xs ml-auto font-bold py-2 px-6" onclick="ignRestoreBulk()">♻️ 恢复</button></div><div id="ignore-list" class="space-y-4 max-h-[380px] overflow-y-auto pr-2"></div></div>
    </div>
   </div></div>
  </div>
@@ -873,7 +873,7 @@ async function loadIgnored(){
     const mf=(($('ignore-mode-filter')?.value)||'').trim();
     if(mf)d=d.filter(i=>i.mode===mf);
     if(kw)d=d.filter(i=>`${i.name||''} ${i.emby_id||''}`.toLowerCase().includes(kw));
-    const modeMap = { "av": "番号", "smart": "洗版", "size": "同大", "duration": "时长", "noposter": "封面", "tiny": "极小", "global": "全局" };
+    const modeMap = { "av": "番号", "smart": "去重", "size": "同大", "duration": "时长", "noposter": "封面", "tiny": "极小", "global": "全局" };
     const scopeMap = { item: '单项', group: '分组' };
     $('ignore-list').innerHTML=d.map(i=>`<div class="bg-white/5 p-3 rounded-xl border border-white/5 flex justify-between items-center"><div class="flex items-center gap-3 overflow-hidden min-w-0 flex-1"><input type="checkbox" class="ign-check w-4 h-4 accent-sky-500 cursor-pointer flex-shrink-0" value="${i.id}"><div class="flex flex-col min-w-0"><div class="truncate pr-2 text-xs text-slate-300 font-bold" title="${i.name||i.emby_id}">${i.name||i.emby_id}</div><div class="flex items-center gap-2 mt-1"><span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 font-mono">${modeMap[i.mode] || i.mode}</span><span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-mono">${scopeMap[i.scope_type] || i.scope_type || '单项'}</span><span class="text-[10px] text-slate-600 font-mono truncate">${i.scope_type==='group' ? (i.scope_key||i.emby_id) : i.emby_id}</span></div></div></div><button class="btn btn-g py-1 px-3 text-[10px] flex-shrink-0 ml-2" onclick="ignRestoreSingle(${i.id})">恢复</button></div>`).join('') || '<div class="text-slate-500 text-center py-4 text-[10px]">无匹配黑名单</div>'
 }
