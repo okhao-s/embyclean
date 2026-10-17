@@ -68,8 +68,10 @@ class WebhookBuffer:
 wb_buffer = WebhookBuffer()
 
 sync_lock = asyncio.Lock(); global_token = ""; current_sync_lib = ""; last_sync_trigger_slot = ""
-# Emby 侧并发要克制：一次删/刷太多会让 Emby 的库监视+元数据队列爆掉，表现就是 Emby 卡死
-DELETE_CONCURRENCY = int(os.getenv("DELETE_CONCURRENCY", "4"))
+# Emby 侧并发要克制：并发删除会把 Emby 的库监视压崩（实测会把它打到无响应），默认串行
+DELETE_CONCURRENCY = int(os.getenv("DELETE_CONCURRENCY", "1"))
+# 串行时每条之间留的间隔，给 Emby 消化上一次删除（库监视/DB 写入）
+DELETE_INTERVAL = float(os.getenv("DELETE_INTERVAL", "0.5"))
 REFRESH_CONCURRENCY = int(os.getenv("REFRESH_CONCURRENCY", "2"))
 # 删除走同步返回：批量删除整体最多等这么久，超时回 504 让前端提示重新扫描核对
 DELETE_TIMEOUT = float(os.getenv("DELETE_TIMEOUT", "180"))
@@ -818,31 +820,36 @@ def ignore_del(row_id: int):
         sys_log(f"[IGNORE] ♻️ 恢复白名单 [{mode}]: {name}") 
     db.close(); return ok(status="ok")
 
-async def _delete_one(client, base, eid, token, sem):
+async def _delete_one(client, base, eid, token, sem=None):
     """删单条，返回 (emby_id, None) 表示成功，(emby_id, 原因) 表示失败。5xx/网络抖动重试一次。"""
-    async with sem:
-        await asyncio.sleep(0.1)  # 轻微错峰：Emby 每条删除都会触发库监视，别同时涌进去
-        last_reason = "unknown"
-        for attempt in (1, 2):
+    if sem is not None:
+        async with sem:
+            return await _delete_one_inner(client, base, eid, token)
+    return await _delete_one_inner(client, base, eid, token)
+
+
+async def _delete_one_inner(client, base, eid, token):
+    last_reason = "unknown"
+    for attempt in (1, 2):
+        try:
+            r = await client.delete(f"{base}/Items/{eid}", headers=emby_headers(token), timeout=20.0)
+            if r.status_code in (200, 204):
+                return eid, None
+            last_reason = f"HTTP {r.status_code}"
+            # 403/404 不会因为重试变好，直接返回；5xx 才重试
+            if r.status_code < 500:
+                return eid, last_reason
             try:
-                r = await client.delete(f"{base}/Items/{eid}", headers=emby_headers(token), timeout=20.0)
-                if r.status_code in (200, 204):
-                    return eid, None
-                last_reason = f"HTTP {r.status_code}"
-                # 403/404 不会因为重试变好，直接返回；5xx 才重试
-                if r.status_code < 500:
-                    return eid, last_reason
-                try:
-                    body = (r.text or "").strip().replace("\n", " ")[:120]
-                    if body:
-                        last_reason = f"HTTP {r.status_code} {body}"
-                except Exception:
-                    pass
-            except Exception as e:
-                last_reason = f"{type(e).__name__}: {e}"
-            if attempt == 1:
-                await asyncio.sleep(0.8)
-        return eid, last_reason
+                body = (r.text or "").strip().replace("\n", " ")[:120]
+                if body:
+                    last_reason = f"HTTP {r.status_code} {body}"
+            except Exception:
+                pass
+        except Exception as e:
+            last_reason = f"{type(e).__name__}: {e}"
+        if attempt == 1:
+            await asyncio.sleep(0.8)
+    return eid, last_reason
 
 
 async def perform_delete(ids, host, token, job=None):
@@ -863,10 +870,7 @@ async def perform_delete(ids, host, token, job=None):
     try:
         client = emby_client(db)
         base = host.rstrip('/')
-        sem = asyncio.Semaphore(DELETE_CONCURRENCY)
-
-        async def one(eid):
-            outcome = await _delete_one(client, base, eid, token, sem)
+        def track(outcome):
             if job is not None:
                 job["done"] = job.get("done", 0) + 1
                 if outcome[1] is None:
@@ -875,7 +879,21 @@ async def perform_delete(ids, host, token, job=None):
                     job["failed"].append({"id": outcome[0], "reason": outcome[1]})
             return outcome
 
-        outcomes = await asyncio.gather(*[one(eid) for eid in ids])
+        if DELETE_CONCURRENCY <= 1:
+            # 严格一条一条删：上一条 Emby 处理完再发下一条，中间再留一点间隔。
+            # 并发删除会让 Emby 的库监视排队堆积，直接把它打到无响应。
+            outcomes = []
+            for idx, eid in enumerate(ids):
+                outcomes.append(track(await _delete_one(client, base, eid, token, None)))
+                if idx < len(ids) - 1 and DELETE_INTERVAL > 0:
+                    await asyncio.sleep(DELETE_INTERVAL)
+        else:
+            sem = asyncio.Semaphore(DELETE_CONCURRENCY)
+
+            async def one(eid):
+                return track(await _delete_one(client, base, eid, token, sem))
+
+            outcomes = await asyncio.gather(*[one(eid) for eid in ids])
 
         ok_ids = [eid for eid, reason in outcomes if reason is None]
         failed = [(eid, reason) for eid, reason in outcomes if reason is not None]
