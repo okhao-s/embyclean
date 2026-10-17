@@ -59,9 +59,25 @@ wb_buffer = WebhookBuffer()
 sync_lock = asyncio.Lock(); global_token = ""; current_sync_lib = ""; last_sync_trigger_slot = ""
 DELETE_CONCURRENCY = 8
 STATUS_LOG_INTERVAL = 300
+# /api/status 远端探测缓存（秒）：前端 5s 轮询一次，没有缓存会把 Emby 打满
+STATUS_PROBE_TTL = float(os.getenv("STATUS_PROBE_TTL", "10"))
+_status_probe_cache = {"key": "", "at": 0.0, "data": None}
 last_status_log_at = {}
-client = httpx.AsyncClient(timeout=120.0, verify=True)
-insecure_client = httpx.AsyncClient(timeout=120.0, verify=False)
+client = httpx.AsyncClient(timeout=120.0, verify=True, trust_env=False)
+insecure_client = httpx.AsyncClient(timeout=120.0, verify=False, trust_env=False)
+# Emby 走内网：trust_env=False，别让宿主/容器的 HTTP_PROXY、ALL_PROXY 把内网请求劫走
+# （容器里设了 ALL_PROXY=socks5://... 又没装 socksio 时，httpx 在 import 阶段就直接抛 ImportError）
+# Webhook 可能指向公网：单独一个客户端，尽量沿用环境代理。
+# 但如果环境里配了 socks 代理而没装 socksio，httpx 在构造阶段就会抛 ImportError，
+# 整个进程连 import 都过不去 —— 这里退化为不走代理，而不是让服务起不来。
+def _make_webhook_client():
+    try:
+        return httpx.AsyncClient(timeout=20.0)
+    except Exception as exc:
+        sys_log(f"[WEBHOOK] ⚠️ 环境代理不可用（{exc}），通知改为直连")
+        return httpx.AsyncClient(timeout=20.0, trust_env=False)
+
+webhook_client = _make_webhook_client()
 EMBY_HEADERS = {"X-Emby-Client": "Cleaner", "X-Emby-Device-Name": "Server", "X-Emby-Device-Id": "v1.2-Precision", "X-Emby-Client-Version": "4.9"}
 
 def ssl_verify_enabled(db):
@@ -91,6 +107,7 @@ def utc_now_ts_float() -> float:
 def invalidate_runtime_state(reset_sync_progress: bool = False):
     global global_token, current_sync_lib
     global_token = ""
+    _status_probe_cache.update({"key": "", "at": 0.0, "data": None})
     if reset_sync_progress:
         current_sync_lib = ""
 
@@ -275,7 +292,7 @@ async def send_webhook(db, command, detail, raw=False):
     if not url: return
     text_content = detail if raw else f"🛰️ **EmbyCleaner 通知**\n```\n[任务] : {command}\n[详情] : {detail}\n```"
     try:
-        await client.post(url, json={"title": f"EmbyCleaner: {command}", "text": text_content})
+        await webhook_client.post(url, json={"title": f"EmbyCleaner: {command}", "text": text_content})
     except Exception as e:
         sys_log(f"[WEBHOOK] ❌ 发送失败: {e}")
 
@@ -366,7 +383,10 @@ async def delayed_single_update(ids: List[str], host: str, token: str):
                             if item_data.get("MediaSources"):
                                 src = item_data["MediaSources"][0]
                                 local_item.size = src.get("Size", 0)
-                                local_item.duration = src.get("RunTimeTicks", 0)
+                                # RunTimeTicks 是 100ns 单位，本地 duration 存的是秒（do_sync 里 /1e7）。
+                                # 直接写 ticks 会让时长查重凭空放大 1000 万倍。
+                                ticks = src.get("RunTimeTicks", 0)
+                                local_item.duration = float(ticks) / 10000000.0 if ticks else 0.0
                                 if src.get("Width"):
                                     local_item.resolution = src.get("Width", 0)
                             updated += 1
@@ -442,6 +462,7 @@ async def shutdown_event():
             await scheduler_task
     await client.aclose()
     await insecure_client.aclose()
+    await webhook_client.aclose()
 
 @app.get("/api/health")
 def health_api():
@@ -452,23 +473,35 @@ async def st_api():
     db = SessionLocal()
     sn, sv, sid, con = "离线", "", "", False
     h = get_conf(db, "host")
-    t = ""
-    if h:
-        try:
-            t = await asyncio.wait_for(get_token(db), timeout=6.0)
-        except Exception as e:
-            log_status_once("status_token_timeout", f"[STATUS] ⚠️ 获取 token 超时/失败: {e}")
-            t = ""
-    if h and t:
-        try:
-            r = await emby_client(db).get(f"{h.rstrip('/')}/System/Info", headers=emby_headers(t), timeout=5.0)
-            if r.status_code == 200:
-                info = r.json(); sid = info.get("Id") or info.get("id") or info.get("ServerId") or ""
-                sn, sv, con = info.get("ServerName"), info.get("Version"), True
-            elif r.status_code in [401, 403]:
-                await get_token(db, force=True)
-        except Exception as e:
-            log_status_once("status_info_error", f"[STATUS] ⚠️ 获取服务状态失败: {e}")
+    # 前端每 5s 轮询一次，每个标签页都要打一次 Emby 登录 + System/Info。
+    # 远端探测结果缓存一小段时间，多标签页/多客户端时不再把 Emby 打满。
+    probe_key = f"{h}|{get_conf(db, 'user')}|{ssl_verify_enabled(db)}"
+    now_mono = time.monotonic()
+    cached = _status_probe_cache
+    cache_valid = bool(h and cached["data"] and cached["key"] == probe_key
+                       and now_mono - cached["at"] < STATUS_PROBE_TTL)
+    if cache_valid:
+        sn, sv, sid, con = cached["data"]
+    else:
+        t = ""
+        if h:
+            try:
+                t = await asyncio.wait_for(get_token(db), timeout=6.0)
+            except Exception as e:
+                log_status_once("status_token_timeout", f"[STATUS] ⚠️ 获取 token 超时/失败: {e}")
+                t = ""
+        if h and t:
+            try:
+                r = await emby_client(db).get(f"{h.rstrip('/')}/System/Info", headers=emby_headers(t), timeout=5.0)
+                if r.status_code == 200:
+                    info = r.json(); sid = info.get("Id") or info.get("id") or info.get("ServerId") or ""
+                    sn, sv, con = info.get("ServerName"), info.get("Version"), True
+                elif r.status_code in [401, 403]:
+                    await get_token(db, force=True)
+            except Exception as e:
+                log_status_once("status_info_error", f"[STATUS] ⚠️ 获取服务状态失败: {e}")
+        if h:
+            _status_probe_cache.update({"key": probe_key, "at": now_mono, "data": (sn, sv, sid, con)})
     res = {"local_cache": db.query(MediaItem).count(), "cleaned_count": get_conf(db, "cleaned_count") or "0", "saved_space": get_conf(db, "saved_space") or "0", "is_syncing": sync_lock.locked(), "sync_lib": current_sync_lib, "connected": con, "server_name": sn, "server_id": sid, "server_ver": sv, "user_name": get_conf(db, "user"), "sync_cron": get_conf(db, "cron_sync"), "last_log": log_buffer[-1] if log_buffer else "就绪", "status_checked_at": int(time.time())}
     db.close(); return res
 
