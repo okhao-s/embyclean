@@ -210,11 +210,9 @@ body { background: var(--bg-main); color: var(--text-main); font-family: var(--f
 #modal.open, #conf-modal.open, .modal.open { display: flex; }
 
 input { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border); padding: 10px; border-radius: 8px; color: var(--text-strong); outline: none; transition: 0.2s; font-size: 13px; }
-#toast-box { position: fixed; top: 24px; right: 24px; z-index: 100; display: flex; flex-direction: column; gap: 8px; transition: top .2s ease; }
-/* 进度条占用右上角时，toast 整体下移，避免互相遮挡 */
-body.op-active #toast-box { top: 104px; }
+#toast-box { position: fixed; top: 24px; right: 24px; z-index: 100; display: flex; flex-direction: column; gap: 8px; }
 /* 左上角操作进度：只显示整体进度条，不逐条刷条目 */
-#op-progress { position: fixed; top: 16px; right: 16px; z-index: 200; width: 240px; background: rgba(15,23,42,0.92); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; backdrop-filter: blur(10px); box-shadow: 0 10px 25px -10px rgba(0,0,0,0.6); display: none; }
+#op-progress { display: none; width: 220px; flex-shrink: 0; background: rgba(15,23,42,0.92); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; }
 #op-progress.open { display: block; }
 .op-progress-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 11px; color: var(--text-soft); font-weight: bold; margin-bottom: 8px; gap: 8px; }
 .op-progress-track { height: 6px; background: rgba(255,255,255,0.08); border-radius: 999px; overflow: hidden; }
@@ -337,8 +335,7 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
 .bg-white\/5 { background: var(--panel-3) !important; }
 .border-white\/5, .border-white\/10 { border-color: var(--border-soft) !important; }
 </style></head><body data-theme="obsidian">
-<div id="loader" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] hidden items-center justify-center"><div class="w-12 h-12 border-4 border-sky-500 border-t-transparent rounded-full animate-spin"></div></div><div id="op-progress"><div class="op-progress-head"><span id="op-progress-text">处理中 0/0</span><span id="op-progress-pct">0%</span></div><div class="op-progress-track"><div id="op-progress-fill" class="op-progress-fill"></div></div></div>
-<div id="toast-box"></div>
+<div id="loader" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] hidden items-center justify-center"><div class="w-12 h-12 border-4 border-sky-500 border-t-transparent rounded-full animate-spin"></div></div><div id="toast-box"></div>
 
 <div id="conf-modal"><div class="modal-card text-center">
     <div id="conf-icon" class="text-6xl mb-6">⚠️</div>
@@ -425,7 +422,7 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
     <div class="flex gap-6 items-center flex-shrink-0"><button class="btn btn-g" onclick="nav('cleaner')">⬅ 返回</button>
         <span class="text-slate-400">已展示 <b id="rc-shown" class="text-sky-400 text-xl font-mono">0</b> / 共 <b id="rc-total" class="text-white text-xl font-mono">0</b> 项</span>
     </div>
-    <div id="tb" class="flex flex-wrap gap-2"></div>
+    <div class="flex items-center gap-3 ml-auto"><div id="op-progress"><div class="op-progress-head"><span id="op-progress-text">处理中 0/0</span><span id="op-progress-pct">0%</span></div><div class="op-progress-track"><div id="op-progress-fill" class="op-progress-fill"></div></div></div><div id="tb" class="flex flex-wrap gap-2"></div></div>
    </div>
    <div id="rbox" class="flex flex-col gap-4"></div>
    <div id="load-status">✨ 准备就绪</div>
@@ -552,14 +549,12 @@ function opRender(){
       opResults = [];
       toast(parts.join(' · '));
     }
-    document.body.classList.remove('op-active');
     clearTimeout(opHideTimer);
     opHideTimer = setTimeout(()=>$('op-progress').classList.remove('open'), 900);
     return;
   }
   clearTimeout(opHideTimer);
   $('op-progress').classList.add('open');
-  document.body.classList.add('op-active');
   const total = tasks.reduce((a,t)=>a+t.total,0);
   const done = tasks.reduce((a,t)=>a+Math.min(t.done,t.total),0);
   const failed = tasks.reduce((a,t)=>a+(t.failed||0),0);
