@@ -210,7 +210,9 @@ body { background: var(--bg-main); color: var(--text-main); font-family: var(--f
 #modal.open, #conf-modal.open, .modal.open { display: flex; }
 
 input { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border); padding: 10px; border-radius: 8px; color: var(--text-strong); outline: none; transition: 0.2s; font-size: 13px; }
-#toast-box { position: fixed; top: 24px; right: 24px; z-index: 100; display: flex; flex-direction: column; gap: 8px; }
+/* 通知放到结果页吸顶头部下方：原来 top:24 会盖住「全选/按推荐选择」这些按钮 */
+#toast-box { position: fixed; top: 104px; right: 24px; z-index: 100; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+@media (max-width: 768px) { #toast-box { top: 72px; right: 12px; left: 12px; } }
 /* 左上角操作进度：只显示整体进度条，不逐条刷条目 */
 #op-progress { display: none; width: 220px; flex-shrink: 0; background: rgba(15,23,42,0.92); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; }
 #op-progress.open { display: block; }
