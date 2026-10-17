@@ -904,17 +904,12 @@ async function deleteDurationItemDirect(id, e){
     if(!item){toast('❌ 条目不存在');return}
     return deleteOneConfirmed(id, item);
 }
-// 单条删除：走后端任务并轮询，成功才从界面移除
+// 单条删除：点击即移除，任务在后台跑
 async function deleteOneConfirmed(id, item){
-    try{
-        const job = await runOp('delete', [id], '🗑️ 删除中');
-        const failed = (job.failed||[])[0];
-        if(failed) throw new Error(failed.reason||'删除失败');
-        removeItemsFromState([id]);
-        poll();
-    }catch(err){
-        toast(`❌ 删除失败: ${err.message||err}`);
-    }
+    removeItemsFromState([id]);
+    poll();
+    try{ await runOp('delete', [id], '🗑️ 删除中'); }
+    catch(err){ toast(`❌ 删除失败: ${err.message||err}`) }
 }
 async function deleteItemDirect(id, e){
     e.stopPropagation();
@@ -922,7 +917,11 @@ async function deleteItemDirect(id, e){
     if(!item){toast('❌ 条目不存在');return}
     return deleteOneConfirmed(id, item);
 }
-async function del() { const run=async()=>{const ids=Array.from(st.s);if(!ids.length)return;try{const job=await runOp('delete',ids,'🗑️ 删除中');const failedIds=new Set((job.failed||[]).map(f=>f.id));const done=ids.filter(id=>!failedIds.has(id));if(done.length)removeItemsFromState(done);st.s.clear();$('act-bar').classList.add('hidden');poll()}catch(err){toast(`❌ 删除失败: ${err.message||err}`)}}; if(prefConfirmEnabled()) previewBatch('批量删除', run); else run() }
+async function del() { const run=async()=>{const ids=Array.from(st.s);if(!ids.length)return;
+  // 点击即从界面移除（乐观更新），删除任务在后台跑，进度条继续显示
+  removeItemsFromState(ids); st.s.clear(); $('act-bar').classList.add('hidden'); poll();
+  try{ await runOp('delete', ids, '🗑️ 删除中'); }catch(err){ toast(`❌ 删除失败: ${err.message||err}`) }
+}; if(prefConfirmEnabled()) previewBatch('批量删除', run); else run() }
 async function ignoreItems(){ const run=async()=>{const ids=Array.from(st.s); if(!ids.length){toast('❌ 未勾选');return} if(st.m==='duration'){ const selected=selectedItems(); const groupKeys=[...new Set(selected.map(x=>x.groupKey).filter(Boolean))]; if(!groupKeys.length){toast('❌ 未找到当前分组标识');return} const removeIds=[...new Set(selected.flatMap(x=>x.groupRaw?.items?.map(i=>i.emby_id)||[]))]; removeItemsFromState(removeIds); st.s.clear(); $('act-bar').classList.add('hidden'); toast('✅ 已忽略当前分组'); await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({group_keys: groupKeys, mode: st.m})}); return } st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0); prepareDerivedData(); st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden'); toast('✅ 已添加忽略'); await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids: ids, mode: st.m})}); }; if(prefConfirmEnabled()) previewBatch(st.m==='duration'?'批量忽略当前分组':'批量忽略', run); else await run() }
 async function refreshItems(){ const run=async()=>{const ids=Array.from(st.s);if(!ids.length){toast('❌ 未选中');return}try{await runOp('refresh', ids, '🔄 刷新中');st.s.clear();$('act-bar').classList.add('hidden');poll()}catch(err){toast(`❌ 刷新失败: ${err.message||err}`)}}; if(prefConfirmEnabled()) previewBatch('批量刷新', run); else run() }
 

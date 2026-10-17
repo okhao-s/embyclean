@@ -7,6 +7,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import suppress
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from core.db import init_db, SessionLocal, Config, IgnoredItem, AuditTask, MediaItem, get_conf, set_conf
 from core.schemas import DeleteRequest, IgnoreRequest, RefreshRequest, TaskReq, ConfigRequest
 from core.responses import ok, err
@@ -413,9 +414,28 @@ async def do_sync(trigger="手动"):
                                 w = ms["MediaStreams"][0].get("Width", 0)
                         c, uc, u = scanner_service.decorate_media_flags(path, i.get('Name', ''))
                         tmdb_id = str((i.get("ProviderIds") or {}).get("Tmdb") or "").strip()
-                        buf.append(MediaItem(emby_id=i["Id"], name=i.get("Name", ""), path=path, resolution=w, size=s, duration=d, has_poster="Primary" in i.get("ImageTags", {}), library_id=lib_id, date_created=date_created, tag_c=c, tag_uc=uc, tag_u=u, tmdb_id=tmdb_id, sync_gen=sync_gen))
+                        buf.append({
+                            "emby_id": i["Id"], "name": i.get("Name", ""), "path": path,
+                            "resolution": w, "size": s, "duration": d,
+                            "has_poster": "Primary" in i.get("ImageTags", {}),
+                            "library_id": lib_id, "date_created": date_created,
+                            "tag_c": c, "tag_uc": uc, "tag_u": u,
+                            "tmdb_id": tmdb_id, "sync_gen": sync_gen,
+                        })
                     if buf:
-                        db.bulk_save_objects(buf); db.commit(); tot += len(buf)
+                        # emby_id 上有 UNIQUE 约束：换代同步时旧行还在表里，
+                        # 直接 INSERT 会撞唯一键把整次同步打回滚（曾经踩过）。
+                        # 用 SQLite 的 upsert 原地覆盖，行不会消失。
+                        stmt = sqlite_insert(MediaItem).values(buf)
+                        stmt = stmt.on_conflict_do_update(
+                            index_elements=["emby_id"],
+                            set_={k: getattr(stmt.excluded, k) for k in (
+                                "name", "path", "resolution", "size", "duration", "has_poster",
+                                "library_id", "date_created", "tag_c", "tag_uc", "tag_u",
+                                "tmdb_id", "sync_gen",
+                            )},
+                        )
+                        db.execute(stmt); db.commit(); tot += len(buf)
                     sys_log(f"[SYNC] ⏳ 索引 [{lib_name}]: {min(start_index + len(items), total_count)} / {total_count}")
                     start_index += len(items)
                     if start_index >= total_count:
