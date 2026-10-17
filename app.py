@@ -1,11 +1,12 @@
-import os, re, logging, asyncio, httpx, time
+import os, re, logging, asyncio, httpx, time, collections
 from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.responses import HTMLResponse
+from fastapi.middleware.gzip import GZipMiddleware
 from contextlib import suppress
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from core.db import init_db, SessionLocal, Config, IgnoredItem, AuditTask, MediaItem, get_conf, set_conf
 from core.schemas import DeleteRequest, IgnoreRequest, RefreshRequest, TaskReq, ConfigRequest
 from core.responses import ok, err
@@ -14,17 +15,23 @@ from services.scanner import MODE_MAP
 from services.scheduler import cron_matches, is_valid_cron
 
 app = FastAPI()
+# 扫描结果动辄 5-8MB JSON，gzip 后小一个量级；大库时前端等待时间明显下降
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 init_db()
 templates = Jinja2Templates(directory="templates")
 
 # --- 日志系统 ---
 log_buffer = []
+log_base = 0          # 被裁掉的行数，前端靠它做增量拉取
+LOG_BUFFER_MAX = 20000
 class MemoryHandler(logging.Handler):
     def emit(self, record):
+        global log_base
         try:
             msg = self.format(record); ts = datetime.now().strftime("%H:%M:%S")
             log_buffer.append(f"[{ts}] {msg}")
-            if len(log_buffer) > 20000: log_buffer.pop(0)
+            if len(log_buffer) > LOG_BUFFER_MAX:
+                log_buffer.pop(0); log_base += 1
         except Exception:
             pass
 
@@ -46,25 +53,65 @@ class WebhookBuffer:
     async def _flush_later(self):
         await asyncio.sleep(5)
         async with self.lock:
-            if self.count > 0: await self._send()
+            count, size = self.count, self.size
             self.count = 0; self.size = 0; self.timer_task = None
-    async def _send(self):
-        sz = f"{self.size/1048576:.2f} MB" if self.size < 1073741824 else f"{self.size/1073741824:.2f} GB"
+        # 发送放在锁外：webhook 慢(最长 20s)时不能卡住删除流程里的 add()
+        if count > 0:
+            await self._send(count, size)
+    async def _send(self, count, size):
+        sz = f"{size/1048576:.2f} MB" if size < 1073741824 else f"{size/1073741824:.2f} GB"
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        msg = f"🛰️ **EmbyCleaner 任务报告**\n━━━━━━━━━━━━━━\n⏱️ 时间: {ts}\n📦 数量: {self.count} 个项目\n💾 空间: {sz}\n━━━━━━━━━━━━━━\n✅ 清理执行完毕"
+        msg = f"🛰️ **EmbyCleaner 任务报告**\n━━━━━━━━━━━━━━\n⏱️ 时间: {ts}\n📦 数量: {count} 个项目\n💾 空间: {sz}\n━━━━━━━━━━━━━━\n✅ 清理执行完毕"
         await send_webhook_standalone("清理完成", msg, raw=True)
 
 wb_buffer = WebhookBuffer()
 
 sync_lock = asyncio.Lock(); global_token = ""; current_sync_lib = ""; last_sync_trigger_slot = ""
-DELETE_CONCURRENCY = 8
+# Emby 侧并发要克制：一次删/刷太多会让 Emby 的库监视+元数据队列爆掉，表现就是 Emby 卡死
+DELETE_CONCURRENCY = int(os.getenv("DELETE_CONCURRENCY", "4"))
+REFRESH_CONCURRENCY = int(os.getenv("REFRESH_CONCURRENCY", "2"))
+# 删除走同步返回：批量删除整体最多等这么久，超时回 504 让前端提示重新扫描核对
+DELETE_TIMEOUT = float(os.getenv("DELETE_TIMEOUT", "180"))
+# 单次请求上限，避免一次点几百个把 Emby 锁死
+DELETE_MAX_BATCH = int(os.getenv("DELETE_MAX_BATCH", "500"))
+REFRESH_MAX_BATCH = int(os.getenv("REFRESH_MAX_BATCH", "200"))
 STATUS_LOG_INTERVAL = 300
 # /api/status 远端探测缓存（秒）：前端 5s 轮询一次，没有缓存会把 Emby 打满
-STATUS_PROBE_TTL = float(os.getenv("STATUS_PROBE_TTL", "10"))
+STATUS_PROBE_TTL = float(os.getenv("STATUS_PROBE_TTL", "15"))
 _status_probe_cache = {"key": "", "at": 0.0, "data": None}
 last_status_log_at = {}
-client = httpx.AsyncClient(timeout=120.0, verify=True, trust_env=False)
-insecure_client = httpx.AsyncClient(timeout=120.0, verify=False, trust_env=False)
+
+# Emby 请求统计：/api/status 里能看到最近 60s 打了多少请求，方便判断是谁把 Emby 压死的
+EMBY_STATS = {"total": 0, "errors": 0, "recent": collections.deque(maxlen=2000)}
+
+
+async def _emby_on_request(request):
+    # AsyncClient 的 event hook 必须是可 await 的协程，同步函数会报
+    # "'NoneType' object can't be awaited" 并把所有 Emby 请求打挂
+    EMBY_STATS["total"] += 1
+    EMBY_STATS["recent"].append(time.time())
+
+
+async def _emby_on_response(response):
+    if response.status_code >= 400:
+        EMBY_STATS["errors"] += 1
+
+
+def emby_rpm() -> int:
+    cutoff = time.time() - 60
+    recent = EMBY_STATS["recent"]
+    while recent and recent[0] < cutoff:
+        recent.popleft()
+    return len(recent)
+
+
+# 连接/读取超时压短：Emby 卡住时不能让请求堆在 120s 上，否则越打越死
+EMBY_TIMEOUT = httpx.Timeout(float(os.getenv("EMBY_TIMEOUT", "60")), connect=5.0)
+EMBY_LIMITS = httpx.Limits(max_connections=10, max_keepalive_connections=5)
+client = httpx.AsyncClient(timeout=EMBY_TIMEOUT, verify=True, trust_env=False, limits=EMBY_LIMITS,
+                           event_hooks={"request": [_emby_on_request], "response": [_emby_on_response]})
+insecure_client = httpx.AsyncClient(timeout=EMBY_TIMEOUT, verify=False, trust_env=False, limits=EMBY_LIMITS,
+                                    event_hooks={"request": [_emby_on_request], "response": [_emby_on_response]})
 # Emby 走内网：trust_env=False，别让宿主/容器的 HTTP_PROXY、ALL_PROXY 把内网请求劫走
 # （容器里设了 ALL_PROXY=socks5://... 又没装 socksio 时，httpx 在 import 阶段就直接抛 ImportError）
 # Webhook 可能指向公网：单独一个客户端，尽量沿用环境代理。
@@ -125,10 +172,20 @@ def _chunked(seq, size):
         yield seq[i:i + size]
 
 
+PRUNE_MIN_INTERVAL = float(os.getenv("PRUNE_MIN_INTERVAL", "300"))
+_last_prune_at = 0.0
+
+
 async def prune_missing_media_items(candidate_ids: List[str], trigger: str = "scan") -> int:
+    global _last_prune_at
     ids = [str(x).strip() for x in candidate_ids if str(x).strip()]
     if not ids:
         return 0
+    # 每 5 分钟最多反查一次远端，且同步期间不掺和：扫描很频繁时这个反查会把 Emby 打成筛子
+    now = time.time()
+    if now - _last_prune_at < PRUNE_MIN_INTERVAL or sync_lock.locked():
+        return 0
+    _last_prune_at = now
 
     db = SessionLocal()
     try:
@@ -137,7 +194,7 @@ async def prune_missing_media_items(candidate_ids: List[str], trigger: str = "sc
             return 0
 
         missing_ids = set()
-        for chunk in _chunked(ids, 200):
+        for chunk in _chunked(ids, 100):
             try:
                 res = await emby_client(db).get(
                     f"{h.rstrip('/')}/emby/Items",
@@ -228,7 +285,8 @@ def serialize_findings(findings):
     for f in findings:
         items = []
         for x in f.get("items", []):
-            row = {c.name: getattr(x, c.name) for c in x.__table__.columns}
+            # sync_gen 是同步内部标记，不往外吐，省点带宽
+            row = {c.name: getattr(x, c.name) for c in x.__table__.columns if c.name != "sync_gen"}
             row.update({
                 'display_path': os.path.dirname(x.path) + "/" if x.path else "",
                 'recommend_action': getattr(x, 'recommend_action', ''),
@@ -315,7 +373,9 @@ async def do_sync(trigger="手动"):
                 sys_log(f"[SYNC] ❌ 获取媒体库失败: HTTP {res.status_code}")
                 return False
             libs = res.json().get("Items", [])
-            db.query(MediaItem).delete(); db.commit()
+            # 不再先 DELETE：新一次同步写新的 sync_gen，全部灌完再清旧代。
+            # 否则同步窗口内扫描恒空，中途失败整个缓存就没了。
+            sync_gen = int(time.time())
             tot = 0; seen_ids = set()
             for l in libs:
                 lib_id = l['Id']; lib_name = l.get('Name', 'Unknown'); current_sync_lib = lib_name; start_index = 0
@@ -348,15 +408,20 @@ async def do_sync(trigger="手动"):
                                 w = ms["MediaStreams"][0].get("Width", 0)
                         c, uc, u = scanner_service.decorate_media_flags(path, i.get('Name', ''))
                         tmdb_id = str((i.get("ProviderIds") or {}).get("Tmdb") or "").strip()
-                        buf.append(MediaItem(emby_id=i["Id"], name=i.get("Name", ""), path=path, resolution=w, size=s, duration=d, has_poster="Primary" in i.get("ImageTags", {}), library_id=lib_id, date_created=date_created, tag_c=c, tag_uc=uc, tag_u=u, tmdb_id=tmdb_id))
+                        buf.append(MediaItem(emby_id=i["Id"], name=i.get("Name", ""), path=path, resolution=w, size=s, duration=d, has_poster="Primary" in i.get("ImageTags", {}), library_id=lib_id, date_created=date_created, tag_c=c, tag_uc=uc, tag_u=u, tmdb_id=tmdb_id, sync_gen=sync_gen))
                     if buf:
                         db.bulk_save_objects(buf); db.commit(); tot += len(buf)
                     sys_log(f"[SYNC] ⏳ 索引 [{lib_name}]: {min(start_index + len(items), total_count)} / {total_count}")
                     start_index += len(items)
                     if start_index >= total_count:
                         break
+            # 收尾：删掉上一代残留（含旧版本没有 sync_gen 的 NULL 行）
+            stale = db.query(MediaItem).filter(
+                or_(MediaItem.sync_gen != sync_gen, MediaItem.sync_gen.is_(None))
+            ).delete(synchronize_session=False)
+            db.commit()
             set_conf(db, "last_sync_ts", utc_now_ts())
-            sys_log(f"[SYNC] ✅ 同步完成 (共 {tot} 条)")
+            sys_log(f"[SYNC] ✅ 同步完成 (共 {tot} 条，清理旧缓存 {stale} 条)")
             await send_webhook(db, "全量同步", f"入库 {tot} 条。")
             return True
         except Exception as e:
@@ -366,37 +431,64 @@ async def do_sync(trigger="手动"):
             db.close(); current_sync_lib = ""
 
 async def delayed_single_update(ids: List[str], host: str, token: str):
+    """刷新后校准本地缓存：先并发取远端（限 4 并发），再串行写库。
+
+    旧实现逐条 await，200 条就是 200 次串行往返；而把同一个 SQLAlchemy Session
+    丢进 gather 里并发写又不安全，所以拆成「并发取 / 串行写」两段。
+    """
     await asyncio.sleep(8)
+    ids = [str(x).strip() for x in (ids or []) if str(x).strip()]
+    if not ids:
+        return
     db = SessionLocal(); updated = 0
     try:
-        for eid in ids:
-            try:
-                res = await emby_client(db).get(f"{host.rstrip('/')}/emby/Items", params={"Ids": eid, "Fields": "Path,MediaSources,ImageTags,DateCreated,ProviderIds"}, headers=emby_headers(token))
-                if res.status_code == 200:
-                    items = res.json().get("Items", [])
-                    if items:
-                        item_data = items[0]; local_item = db.query(MediaItem).filter(MediaItem.emby_id == eid).first()
-                        if local_item:
-                            local_item.has_poster = "Primary" in item_data.get("ImageTags", {})
-                            local_item.date_created = item_data.get("DateCreated", "") or local_item.date_created or ""
-                            local_item.path = item_data.get("Path", "") or local_item.path or ""
-                            local_item.name = item_data.get("Name", "") or local_item.name or ""
-                            # 刷新后 TMDB 标识可能才补上，跟着校准，否则大库去重会漏掉它
-                            tmdb_id = str((item_data.get("ProviderIds") or {}).get("Tmdb") or "").strip()
-                            if tmdb_id:
-                                local_item.tmdb_id = tmdb_id
-                            if item_data.get("MediaSources"):
-                                src = item_data["MediaSources"][0]
-                                local_item.size = src.get("Size", 0)
-                                # RunTimeTicks 是 100ns 单位，本地 duration 存的是秒（do_sync 里 /1e7）。
-                                # 直接写 ticks 会让时长查重凭空放大 1000 万倍。
-                                ticks = src.get("RunTimeTicks", 0)
-                                local_item.duration = float(ticks) / 10000000.0 if ticks else 0.0
-                                if src.get("Width"):
-                                    local_item.resolution = src.get("Width", 0)
-                            updated += 1
-            except Exception as e:
-                sys_log(f"[UPDATE] ❌ 热更新失败 [{eid}]: {e}")
+        client = emby_client(db)
+        base = host.rstrip('/')
+        sem = asyncio.Semaphore(4)
+
+        async def fetch_one(eid):
+            async with sem:
+                await asyncio.sleep(0.1)  # 错峰，别在刷新刚下发时继续压 Emby
+                try:
+                    res = await client.get(
+                        f"{base}/emby/Items",
+                        params={"Ids": eid, "Fields": "Path,MediaSources,ImageTags,DateCreated,ProviderIds"},
+                        headers=emby_headers(token),
+                        timeout=20.0,
+                    )
+                    if res.status_code == 200:
+                        items = res.json().get("Items", [])
+                        if items:
+                            return eid, items[0]
+                except Exception as e:
+                    sys_log(f"[UPDATE] ❌ 热更新失败 [{eid}]: {e}")
+                return eid, None
+
+        fetched = await asyncio.gather(*[fetch_one(e) for e in ids])
+        for eid, item_data in fetched:
+            if not item_data:
+                continue
+            local_item = db.query(MediaItem).filter(MediaItem.emby_id == eid).first()
+            if not local_item:
+                continue
+            local_item.has_poster = "Primary" in item_data.get("ImageTags", {})
+            local_item.date_created = item_data.get("DateCreated", "") or local_item.date_created or ""
+            local_item.path = item_data.get("Path", "") or local_item.path or ""
+            local_item.name = item_data.get("Name", "") or local_item.name or ""
+            # 刷新后 TMDB 标识可能才补上，跟着校准，否则 TMDB 查重会漏掉它
+            tmdb_id = str((item_data.get("ProviderIds") or {}).get("Tmdb") or "").strip()
+            if tmdb_id:
+                local_item.tmdb_id = tmdb_id
+            if item_data.get("MediaSources"):
+                src = item_data["MediaSources"][0]
+                local_item.size = src.get("Size", 0)
+                # RunTimeTicks 是 100ns 单位，本地 duration 存的是秒（do_sync 里 /1e7）。
+                # 直接写 ticks 会让时长查重凭空放大 1000 万倍。
+                ticks = src.get("RunTimeTicks", 0)
+                local_item.duration = float(ticks) / 10000000.0 if ticks else 0.0
+                if src.get("Width"):
+                    local_item.resolution = src.get("Width", 0)
+            updated += 1
         db.commit()
         if updated > 0:
             sys_log(f"[UPDATE] 🔥 热更新完成: 校准 {updated} 个项目")
@@ -507,7 +599,7 @@ async def st_api():
                 log_status_once("status_info_error", f"[STATUS] ⚠️ 获取服务状态失败: {e}")
         if h:
             _status_probe_cache.update({"key": probe_key, "at": now_mono, "data": (sn, sv, sid, con)})
-    res = {"local_cache": db.query(MediaItem).count(), "cleaned_count": get_conf(db, "cleaned_count") or "0", "saved_space": get_conf(db, "saved_space") or "0", "is_syncing": sync_lock.locked(), "sync_lib": current_sync_lib, "connected": con, "server_name": sn, "server_id": sid, "server_ver": sv, "user_name": get_conf(db, "user"), "sync_cron": get_conf(db, "cron_sync"), "last_log": log_buffer[-1] if log_buffer else "就绪", "status_checked_at": int(time.time())}
+    res = {"local_cache": db.query(MediaItem).count(), "cleaned_count": get_conf(db, "cleaned_count") or "0", "saved_space": get_conf(db, "saved_space") or "0", "is_syncing": sync_lock.locked(), "sync_lib": current_sync_lib, "connected": con, "server_name": sn, "server_id": sid, "server_ver": sv, "user_name": get_conf(db, "user"), "sync_cron": get_conf(db, "cron_sync"), "last_log": log_buffer[-1] if log_buffer else "就绪", "status_checked_at": int(time.time()), "emby_rpm": emby_rpm(), "emby_requests": EMBY_STATS["total"], "emby_errors": EMBY_STATS["errors"]}
     db.close(); return res
 
 @app.post("/api/config")
@@ -540,6 +632,7 @@ def cfg_post(c: ConfigRequest):
             set_conf(db, "pref.duration.precision", prefs.get("duration_precision", "second"))
             set_conf(db, "pref.smart.keep", prefs.get("smart_keep", "reso_max"))
             set_conf(db, "pref.batch.confirm", prefs.get("confirm_batch", "true"))
+            set_conf(db, "pref.refresh.full", prefs.get("refresh_full", "false"))
         if get_conf(db, "ssl_verify") == "":
             set_conf(db, "ssl_verify", "true")
         sys_log(f"[CONFIG] ✅ 配置已保存 host={host} cron={cron_sync}")
@@ -566,6 +659,7 @@ def cfg_get():
             "duration_precision": get_conf(db, "pref.duration.precision") or "second",
             "smart_keep": get_conf(db, "pref.smart.keep") or "reso_max",
             "confirm_batch": get_conf(db, "pref.batch.confirm") or "true",
+            "refresh_full": get_conf(db, "pref.refresh.full") or "false",
         }
     }
     db.close(); return r
@@ -665,16 +759,24 @@ async def ignore_post(r: IgnoreRequest):
             db.commit()
             return {"status": "ok", "added": added, "scope": "group"}
 
-        for eid in r.ids:
-            exists = db.query(IgnoredItem).filter(IgnoredItem.emby_id == eid, IgnoredItem.mode == r.mode).first()
-            if not exists:
-                name = ""
-                media = db.query(MediaItem).filter(MediaItem.emby_id == eid).first()
-                if media: name = media.name
-                db.add(IgnoredItem(emby_id=eid, name=name, mode=r.mode, scope_type='item', scope_key=''))
-                sys_log(f"[IGNORE] 🚫 已忽略 [{r.mode}]: {name if name else eid}")
+        eids = [str(x).strip() for x in (r.ids or []) if str(x).strip()]
+        if not eids:
+            return {"status": "ok", "scope": "item", "added": 0}
+        # 批量查已忽略项与名称，避免逐条 SELECT（几百条时是几百次往返）
+        existing = {row.emby_id for row in db.query(IgnoredItem.emby_id).filter(
+            IgnoredItem.mode == r.mode, IgnoredItem.emby_id.in_(eids)).all()}
+        names = {row.emby_id: row.name for row in db.query(MediaItem.emby_id, MediaItem.name).filter(
+            MediaItem.emby_id.in_(eids)).all()}
+        added = 0
+        for eid in eids:
+            if eid in existing:
+                continue
+            name = names.get(eid) or ""
+            db.add(IgnoredItem(emby_id=eid, name=name, mode=r.mode, scope_type='item', scope_key=''))
+            added += 1
+            sys_log(f"[IGNORE] 🚫 已忽略 [{r.mode}]: {name if name else eid}")
         db.commit()
-        return {"status": "ok", "scope": "item"}
+        return {"status": "ok", "scope": "item", "added": added}
     finally:
         db.close()
 
@@ -691,62 +793,129 @@ def ignore_del(row_id: int):
         sys_log(f"[IGNORE] ♻️ 恢复白名单 [{mode}]: {name}") 
     db.close(); return ok(status="ok")
 
-async def background_silent_delete(ids, host, token):
-    db = SessionLocal(); c, s = 0, 0
-    sem = asyncio.Semaphore(DELETE_CONCURRENCY)
-    failed = []
-
-    async def fast_del(eid):
-        async with sem:
+async def _delete_one(client, base, eid, token, sem):
+    """删单条，返回 (emby_id, None) 表示成功，(emby_id, 原因) 表示失败。5xx/网络抖动重试一次。"""
+    async with sem:
+        await asyncio.sleep(0.1)  # 轻微错峰：Emby 每条删除都会触发库监视，别同时涌进去
+        last_reason = "unknown"
+        for attempt in (1, 2):
             try:
-                r = await emby_client(db).delete(f"{host.rstrip('/')}/Items/{eid}", headers=emby_headers(token))
-                if r.status_code in [200, 204]:
-                    return eid
-                failed.append((eid, f"HTTP {r.status_code}"))
-                return None
+                r = await client.delete(f"{base}/Items/{eid}", headers=emby_headers(token), timeout=20.0)
+                if r.status_code in (200, 204):
+                    return eid, None
+                last_reason = f"HTTP {r.status_code}"
+                # 403/404 不会因为重试变好，直接返回；5xx 才重试
+                if r.status_code < 500:
+                    return eid, last_reason
+                try:
+                    body = (r.text or "").strip().replace("\n", " ")[:120]
+                    if body:
+                        last_reason = f"HTTP {r.status_code} {body}"
+                except Exception:
+                    pass
             except Exception as e:
-                failed.append((eid, str(e)))
-                return None
+                last_reason = f"{type(e).__name__}: {e}"
+            if attempt == 1:
+                await asyncio.sleep(0.8)
+        return eid, last_reason
 
+
+async def perform_delete(ids, host, token):
+    """真正执行删除并把结果回给调用方，而不是默默吞掉。
+
+    旧实现用 BackgroundTasks 异步删，接口永远返回 started，前端拿不到成败，
+    删失败（Emby 没给删除权限、条目已被移走、403/404）在页面上完全看不出来，
+    表现就是“点了删除没反应/删了又回来”。
+    """
+    ids = [str(x).strip() for x in (ids or []) if str(x).strip()]
+    if len(ids) > DELETE_MAX_BATCH:
+        ids = ids[:DELETE_MAX_BATCH]
+    result = {"requested": len(ids), "deleted": 0, "failed": [], "saved_bytes": 0, "removed_rows": 0}
+    if not ids:
+        return result
+
+    db = SessionLocal()
     try:
-        results = await asyncio.gather(*[fast_del(x) for x in ids])
-        for eid in [x for x in results if x]:
-            i = db.query(MediaItem).filter(MediaItem.emby_id == eid).first()
-            if i:
-                c += 1
-                sz = i.size or 0  # 防止 None 导致累加错误
-                s += sz
-                db.delete(i)
-                await wb_buffer.add(sz)
-        # 一次性提交：删除 + 统计更新，避免多次 commit 导致 session 状态混乱
-        cc = int(get_conf(db, "cleaned_count") or 0) + c
-        ss = int(get_conf(db, "saved_space") or 0) + s
-        cfg_cc = db.query(Config).filter(Config.key == "cleaned_count").first()
-        cfg_ss = db.query(Config).filter(Config.key == "saved_space").first()
-        if cfg_cc: cfg_cc.value = str(cc)
-        else: db.add(Config(key="cleaned_count", value=str(cc)))
-        if cfg_ss: cfg_ss.value = str(ss)
-        else: db.add(Config(key="saved_space", value=str(ss)))
-        db.commit()
+        client = emby_client(db)
+        base = host.rstrip('/')
+        sem = asyncio.Semaphore(DELETE_CONCURRENCY)
+        outcomes = await asyncio.gather(*[_delete_one(client, base, eid, token, sem) for eid in ids])
+
+        ok_ids = [eid for eid, reason in outcomes if reason is None]
+        failed = [(eid, reason) for eid, reason in outcomes if reason is not None]
+        result["deleted"] = len(ok_ids)
+        result["failed"] = [{"id": eid, "reason": reason} for eid, reason in failed]
+
+        # 批量处理本地缓存与统计，避免逐条查询
+        rows = db.query(MediaItem).filter(MediaItem.emby_id.in_(ok_ids)).all() if ok_ids else []
+        saved = 0
+        for row in rows:
+            saved += row.size or 0
+            db.delete(row)
+        result["removed_rows"] = len(rows)
+        result["saved_bytes"] = saved
+
+        if ok_ids:
+            cc = int(get_conf(db, "cleaned_count") or 0) + len(ok_ids)
+            ss = int(get_conf(db, "saved_space") or 0) + saved
+            for key, value in (("cleaned_count", cc), ("saved_space", ss)):
+                cfg = db.query(Config).filter(Config.key == key).first()
+                if cfg:
+                    cfg.value = str(value)
+                else:
+                    db.add(Config(key=key, value=str(value)))
+            db.commit()
+
         if failed:
-            preview = ', '.join([f"{eid}:{reason}" for eid, reason in failed[:5]])
-            sys_log(f"[DELETE] ⚠️ 删除完成，成功 {c} 个，失败 {len(failed)} 个 -> {preview}")
+            preview = ', '.join(f"{eid}:{reason}" for eid, reason in failed[:5])
+            sys_log(f"[DELETE] ⚠️ 成功 {result['deleted']} 个，失败 {len(failed)} 个 -> {preview}")
         else:
-            sys_log(f"[DELETE] ✅ 删除完成，成功 {c} 个")
+            sys_log(f"[DELETE] ✅ 删除完成，成功 {result['deleted']} 个")
+        return result
     finally:
         db.close()
 
+
+async def background_silent_delete(ids, host, token):
+    """兼容旧调用点：后台执行并单独发 webhook 汇总。"""
+    res = await perform_delete(ids, host, token)
+    if res["deleted"] and res["saved_bytes"] > 0:
+        await wb_buffer.add(res["saved_bytes"])
+    return res
+
+
 @app.post("/api/delete")
-async def dele_post(r: DeleteRequest, b: BackgroundTasks):
-    db = SessionLocal(); h, t = get_conf(db, "host"), await get_token(db); db.close()
+async def dele_post(r: DeleteRequest):
+    db = SessionLocal()
+    try:
+        h, t = get_conf(db, "host"), await get_token(db)
+    finally:
+        db.close()
     if not h or not t:
         raise HTTPException(status_code=400, detail="Emby 未配置或认证失败")
-    b.add_task(background_silent_delete, r.ids, h, t); return ok(status="started", queued=len(r.ids))
+    try:
+        result = await asyncio.wait_for(perform_delete(r.ids, h, t), timeout=DELETE_TIMEOUT)
+    except asyncio.TimeoutError:
+        sys_log(f"[DELETE] ⚠️ 删除超时(>{DELETE_TIMEOUT}s)，已发出的请求可能仍在 Emby 侧执行，请稍后重新扫描核对")
+        raise HTTPException(status_code=504, detail=f"删除超时（>{DELETE_TIMEOUT}s），请稍后重新扫描核对结果")
+    if result["deleted"] > 0:
+        await wb_buffer.add(result["saved_bytes"])
+    return ok(status="ok", **result)
 
 @app.get("/api/logs")
-def logs_g(): return log_buffer
+def logs_g(since: Optional[int] = None):
+    # since 缺省时保持老行为（返回全量数组）；带 since 时只回增量，
+    # 日志页 5s 拉一次 2 万行既浪费带宽也让浏览器卡。
+    total = log_base + len(log_buffer)
+    if since is None:
+        return log_buffer
+    start = max(0, since - log_base)
+    return {"total": total, "base": log_base, "lines": log_buffer[start:]}
 @app.post("/api/logs/clear")
-def logs_c(): global log_buffer; log_buffer.clear(); return ok(status="ok")
+def logs_c():
+    global log_buffer, log_base
+    log_buffer.clear(); log_base = 0
+    return ok(status="ok")
 
 @app.get("/", response_class=HTMLResponse)
 async def idx_p(r: Request): return templates.TemplateResponse("index.html", {"request": r})
@@ -772,17 +941,59 @@ async def tw_p():
     db = SessionLocal(); await send_webhook(db, "测试", "链路正常。"); db.close(); return ok(status="ok")
 @app.post("/api/refresh")
 async def refresh_p(r: RefreshRequest, b: BackgroundTasks):
-    db = SessionLocal(); h, t = get_conf(db, "host"), await get_token(db)
-    if not h or not t: db.close(); return err(status="error", message="Emby 未配置或认证失败")
-    sc = 0; fc = 0
-    for eid in r.ids:
-        try:
-            u = f"{h.rstrip('/')}/Items/{eid}/Refresh?Recursive=true&ImageRefreshMode=FullRefresh&MetadataRefreshMode=FullRefresh&ReplaceAllImages=true&ReplaceAllMetadata=true"
-            resp = await emby_client(db).post(u, headers=emby_headers(t))
-            if resp.status_code in [200, 204]: sc += 1
-            else: fc += 1
-        except Exception as e:
-            fc += 1
-            sys_log(f"[REFRESH] ❌ 刷新失败 [{eid}]: {e}")
-    if sc > 0: b.add_task(delayed_single_update, r.ids, h, t)
-    db.close(); return {"status": "ok", "success": sc, "fail": fc}
+    ids = [str(x).strip() for x in (r.ids or []) if str(x).strip()]
+    db = SessionLocal()
+    try:
+        h, t = get_conf(db, "host"), await get_token(db)
+        full_refresh = str(get_conf(db, "pref.refresh.full") or "false").lower() in {"1", "true", "yes", "on"}
+        use_secure = ssl_verify_enabled(db)
+    finally:
+        db.close()
+    if not h or not t:
+        return err(status="error", message="Emby 未配置或认证失败")
+    if not ids:
+        return err(status="error", message="没有选中条目")
+    if len(ids) > REFRESH_MAX_BATCH:
+        return err(status="error", message=f"一次最多刷新 {REFRESH_MAX_BATCH} 个，请分批操作")
+
+    # 默认只做「按需刷新」：Recursive=false、Default 模式、不替换图片/元数据。
+    # 旧实现固定 Recursive=true + FullRefresh + ReplaceAllImages/Metadata：
+    # 每选一个条目就让 Emby 全量重刮并重新下载图片，几十个一起点能把 Emby 的
+    # 元数据队列和 SQLite 直接压死（表现为 Emby 卡死、面板一直转圈）。
+    if full_refresh:
+        query = "Recursive=true&ImageRefreshMode=FullRefresh&MetadataRefreshMode=FullRefresh&ReplaceAllImages=true&ReplaceAllMetadata=true"
+    else:
+        query = "Recursive=false&ImageRefreshMode=Default&MetadataRefreshMode=Default&ReplaceAllImages=false&ReplaceAllMetadata=false"
+
+    http_client = client if use_secure else insecure_client
+    sem = asyncio.Semaphore(REFRESH_CONCURRENCY)
+    ok_ids, failed = [], []
+
+    async def refresh_one(eid):
+        async with sem:
+            await asyncio.sleep(0.2)  # 轻微错峰，别让 Emby 同时处理一堆刷新
+            try:
+                resp = await http_client.post(f"{h.rstrip('/')}/Items/{eid}/Refresh?{query}",
+                                              headers=emby_headers(t), timeout=30.0)
+                if resp.status_code in (200, 204):
+                    return eid, None
+                return eid, f"HTTP {resp.status_code}"
+            except Exception as e:
+                return eid, f"{type(e).__name__}: {e}"
+
+    outcomes = await asyncio.gather(*[refresh_one(x) for x in ids])
+    for eid, reason in outcomes:
+        if reason is None:
+            ok_ids.append(eid)
+        else:
+            failed.append((eid, reason))
+    if failed:
+        preview = ', '.join(f"{eid}:{reason}" for eid, reason in failed[:5])
+        sys_log(f"[REFRESH] ⚠️ 成功 {len(ok_ids)} 个，失败 {len(failed)} 个 -> {preview}")
+    else:
+        sys_log(f"[REFRESH] 🔄 刷新指令已下发 {len(ok_ids)} 个（{'全量重刮' if full_refresh else '按需刷新'}）")
+    if ok_ids:
+        b.add_task(delayed_single_update, ok_ids, h, t)
+    return {"status": "ok", "success": len(ok_ids), "fail": len(failed),
+            "failed": [{"id": eid, "reason": reason} for eid, reason in failed],
+            "mode": "full" if full_refresh else "default"}

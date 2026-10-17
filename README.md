@@ -20,7 +20,7 @@
 - **番号查重（av）**
   - 从名称/路径提取番号后分组
   - 适合同片多版本整理
-- **大库去重（smart）**
+- **TMDB 查重（smart）**
   - 按 Emby 的 `ProviderIds.Tmdb`（TMDB ID）分组，同一个 TMDB ID 出现多次即为重复
   - 同一部片子在多个库里各存一份、或同一库里留了多个版本，都会被归到同一组
   - 没有 TMDB 标识的条目不参与（可在 Emby 里刷新元数据补齐），不会像按名字那样误判
@@ -75,7 +75,7 @@
    - 所属库 ID
    - 创建时间
    - 标签识别结果（`C` / `UC` / `U`）
-   - TMDB ID（`ProviderIds.Tmdb`，大库去重按它分组）
+   - TMDB ID（`ProviderIds.Tmdb`，TMDB 查重按它分组）
 
 扫描任务默认都基于**本地缓存**执行，不是每次直接全库打 Emby API。
 这样更稳，也更快。
@@ -154,6 +154,21 @@
   - `reso_max` / `reso_min`
 - `pref.batch.confirm`
   - `true` / `false`
+
+### 对 Emby 的压力控制（环境变量）
+
+这些默认值是为了**不把 Emby 打挂**，一般不用改：
+
+- `DELETE_CONCURRENCY`（默认 4）：并发删除数。Emby 每条删除都会触发库监视，并发太高会把 Emby 拖死
+- `DELETE_MAX_BATCH`（默认 500）/ `REFRESH_MAX_BATCH`（默认 200）：单次请求的条数上限
+- `REFRESH_CONCURRENCY`（默认 2）：并发刷新数
+- `DELETE_TIMEOUT`（默认 180）：删除整体超时，超时返回 504
+- `EMBY_TIMEOUT`（默认 60）：Emby 请求读超时（连接超时固定 5s）
+- `PRUNE_MIN_INTERVAL`（默认 300）：扫描时反查远端存在性的最小间隔，避免频繁打 Emby
+- `STATUS_PROBE_TTL`（默认 15）：`/api/status` 远端探测缓存，前端 5s 轮询不会每次都登录 Emby
+
+`pref.refresh.full`（设置页「重新刮削走全量模式」）：默认 `false`，即 `Recursive=false + Default + 不替换图片/元数据`。
+打开后会走 `Recursive=true + FullRefresh + ReplaceAllImages/Metadata`，**批量操作极易把 Emby 压到无响应**，只在确实需要重刮时开。
 
 ### 运行态统计
 
@@ -303,7 +318,7 @@ uvicorn app:app --host 0.0.0.0 --port 19898
    - 如果刚改完媒体库，没同步，结果可能旧
 
 4. **推荐规则是启发式，不是绝对正确**
-   - 尤其是大库去重（TMDB 标识缺失时会漏）、番号识别、时长归组
+   - 尤其是 TMDB 查重（标识缺失时会漏）、番号识别、时长归组
    - 仍然需要人工确认
 
 5. **定时器是分钟粒度**

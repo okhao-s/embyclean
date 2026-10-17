@@ -50,8 +50,12 @@ class MediaItem(Base):
     tag_c = Column(Boolean, default=False)
     tag_uc = Column(Boolean, default=False)
     tag_u = Column(Boolean, default=False)
-    # 大库去重按 Emby 的 ProviderIds.Tmdb 分组；空串表示 Emby 端没有 TMDB 标识
+    # TMDB 查重按 Emby 的 ProviderIds.Tmdb 分组；空串表示 Emby 端没有 TMDB 标识
     tmdb_id = Column(String, default="")
+    # 同步代数：新一次全量同步写新 gen，成功后删除旧 gen 的行。
+    # 这样同步过程中缓存不会先被清空（旧实现先 DELETE 再灌，同步窗口里扫描恒空，
+    # 中途失败还会把整个缓存丢掉）。
+    sync_gen = Column(Integer, default=0)
 
 engine = create_engine(DB_PATH, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -75,6 +79,8 @@ def init_db():
                 con.execute(text("ALTER TABLE media_items ADD COLUMN date_created VARCHAR DEFAULT ''"))
             if "tmdb_id" not in cols:
                 con.execute(text("ALTER TABLE media_items ADD COLUMN tmdb_id VARCHAR DEFAULT ''"))
+            if "sync_gen" not in cols:
+                con.execute(text("ALTER TABLE media_items ADD COLUMN sync_gen INTEGER DEFAULT 0"))
             con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_tmdb_id ON media_items(tmdb_id)"))
             con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_library_id ON media_items(library_id)"))
             con.execute(text("CREATE INDEX IF NOT EXISTS idx_media_items_size ON media_items(size)"))

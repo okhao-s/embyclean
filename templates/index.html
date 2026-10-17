@@ -386,7 +386,7 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
    <div class="card"><h2 class="text-xl font-bold mb-6 text-white">2. 扫描模式</h2>
     <div class="mode-grid mb-8">
      <button class="mode-btn" onclick="mode('av',this)"><span class="mode-icon">🔞</span><span class="text-xs font-bold">番号查重</span></button>
-     <button class="mode-btn" onclick="mode('smart',this)"><span class="mode-icon">🎬</span><span class="text-xs font-bold">大库去重</span></button>
+     <button class="mode-btn" onclick="mode('smart',this)"><span class="mode-icon">🎬</span><span class="text-xs font-bold">TMDB查重</span></button>
      <button class="mode-btn" onclick="mode('size',this)"><span class="text-4xl">⚖️</span><span class="text-xs font-bold">同大查重</span></button>
      <button class="mode-btn" onclick="mode('duration',this)"><span class="mode-icon">⏳</span><span class="text-xs font-bold">时长查重</span></button>
      <button class="mode-btn" onclick="mode('noposter',this)"><span class="mode-icon">🖼️</span><span class="text-xs font-bold">缺失封面</span></button>
@@ -458,7 +458,8 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
           <div><label class="block text-[11px] text-slate-400 mb-2">番号推荐规则</label><select id="pref-av" class="text-xs p-3"><option value="tag_uc">选 [UC]</option><option value="tag_c">选 [C]</option><option value="tag_raw">选原版</option></select></div>
           <div><label class="block text-[11px] text-slate-400 mb-2">同大推荐规则</label><select id="pref-size" class="text-xs p-3"><option value="path_long">最长径</option><option value="path_short">最短径</option><option value="name_long">最长名</option><option value="name_short">最短名</option></select></div>
           <div><label class="block text-[11px] text-slate-400 mb-2">时长重复推荐规则</label><select id="pref-duration" class="text-xs p-3"><option value="min">选最小文件</option><option value="max">选最大文件</option></select></div>
-          <div><label class="block text-[11px] text-slate-400 mb-2">大库去重推荐规则</label><select id="pref-smart" class="text-xs p-3"><option value="reso_max">最高分辨率</option><option value="reso_min">最低分辨率</option></select></div>
+          <div><label class="block text-[11px] text-slate-400 mb-2">TMDB查重推荐规则</label><select id="pref-smart" class="text-xs p-3"><option value="reso_max">最高分辨率</option><option value="reso_min">最低分辨率</option></select></div>
+          <div class="col-span-2 flex items-start gap-3 bg-amber-500/5 border border-amber-500/20 rounded-xl p-3"><input type="checkbox" id="pref-refresh-full" class="w-4 h-4 mt-0.5"><label for="pref-refresh-full" class="text-[11px] text-slate-400 leading-5">「重新刮削」走全量模式（Recursive + ReplaceAll 图片/元数据）。会显著加重 Emby 负担，批量操作易把 Emby 压到无响应，只有确实要重刮时才开。</label></div>
         </div>
         <label class="flex items-center gap-3 mt-4 text-xs text-slate-300"><input type="checkbox" id="pref-confirm" class="w-4 h-4 accent-sky-500"> 批量删除/忽略/刷新前先预览</label>
      </div>
@@ -475,7 +476,9 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
 <div id="batch-preview" class="modal"><div class="modal-box max-w-xl"><div class="text-xl font-bold mb-4 text-white">批量操作预览</div><div id="batch-preview-body" class="text-sm text-slate-300 space-y-2"></div><div class="flex justify-end gap-3 mt-6"><button class="btn btn-g px-5" onclick="closeBatchPreview()">取消</button><button class="btn btn-p px-5" id="batch-preview-confirm">确认执行</button></div></div></div>
 <script>
 const $=id=>document.getElementById(id);
-let appConfig={},st={m:'av',ls:new Set(),d:[],flat:[],p:1,s:new Set(),sid:'',ignS:new Set(),loaded:0,loading:false,scanSeq:0,scanCtrl:null,scanBusy:false,scanBtnText:'',durationScope:'dir',durationPrecision:'second'},PAGE_SIZE=50,currentTasks=[];
+// 媒体名/路径/日志都来自 Emby，直接拼进 innerHTML 会被当成 HTML 解析（破版甚至 XSS）
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+let appConfig={},st={m:'av',ls:new Set(),d:[],flat:[],p:1,s:new Set(),sid:'',ignS:new Set(),loaded:0,loading:false,scanSeq:0,scanCtrl:null,scanBusy:false,scanBtnText:'',durationScope:'dir',durationPrecision:'second',logSeq:0},PAGE_SIZE=50,currentTasks=[];
 const SCAN_BTN_SELECTOR="button[onclick=\"scan()\"]";
 const THEMES=['obsidian','frost','terminal','paper'];
 function applyTheme(theme){const t=THEMES.includes(theme)?theme:'obsidian';document.body.setAttribute('data-theme',t);document.querySelectorAll('[data-theme-option]').forEach(el=>el.classList.toggle('active', el.dataset.themeOption===t));localStorage.setItem('embyclean_theme', t)}
@@ -666,7 +669,7 @@ function renderMore(count = PAGE_SIZE) {
         const k=st.s.has(i.emby_id);let img=i.has_poster?`<img src="${appConfig.host}/emby/Items/${i.emby_id}/Images/Primary?maxHeight=150" class="w-16 h-24 object-cover mx-4 rounded-lg flex-shrink-0 shadow-md">`:'';
         
         // 🚀 路径显示逻辑优化：同大查重(size) 显示路径对比
-        let subT=""; const recBadge=i.recommend_action==='keep'?`<span class="text-[10px] px-2 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/20">推荐保留</span>`:(i.recommend_action==='delete'?`<span class="text-[10px] px-2 py-1 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/20">推荐删除</span>`:''); const recReason=i.recommend_reason?`<div class="text-[11px] text-slate-400 mt-1">${i.recommend_reason}</div>`:'';
+        let subT=""; const recBadge=i.recommend_action==='keep'?`<span class="text-[10px] px-2 py-1 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/20">推荐保留</span>`:(i.recommend_action==='delete'?`<span class="text-[10px] px-2 py-1 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/20">推荐删除</span>`:''); const recReason=i.recommend_reason?`<div class="text-[11px] text-slate-400 mt-1">${esc(i.recommend_reason)}</div>`:'';
         if(st.m=='size' || st.m=='duration'){
             let dp=i.path.substring(0,i.path.lastIndexOf('/')+1);
             let ps=i.groupRaw.items.map(x=>x.path.substring(0,x.path.lastIndexOf('/')+1));
@@ -680,13 +683,13 @@ function renderMore(count = PAGE_SIZE) {
             // 路径对比样式：基础路径 + 差异路径
             subT=cm?`<span class="path-base">${cm}</span><span class="path-diff">${dp.replace(cm,"")}</span>`:`<span class="path-diff">${dp}</span>`
         }else{
-            subT=`<span class="path-base">${i.display_path}</span>`
+            subT=`<span class="path-base">${esc(i.display_path)}</span>`
         }
         
         if(i.groupItemsIds!==lg){
             const allC=i.groupRaw.items.every(x=>st.s.has(x.emby_id));
             // 🚀 组选择逻辑：点击整个标题栏 (onclick) 触发
-            h+=`<div class="bg-slate-800/40 rounded-2xl overflow-hidden mb-4 border border-white/5 shadow-xl mt-4"><div class="px-5 py-4 border-b border-white/5 bg-white/5 font-bold text-sky-400 flex items-center gap-4 cursor-pointer hover:bg-white/10 transition" data-group-ids="${i.groupItemsIds}" data-group-checked="${allC?'1':'0'}" onclick="togG('${i.groupItemsIds}', event)"><input type="checkbox" class="w-5 h-5 accent-sky-500 cursor-pointer flex-shrink-0 pointer-events-none" ${allC?'checked':''}><span class="text-lg truncate select-none">${i.groupTitle}</span></div>`;
+            h+=`<div class="bg-slate-800/40 rounded-2xl overflow-hidden mb-4 border border-white/5 shadow-xl mt-4"><div class="px-5 py-4 border-b border-white/5 bg-white/5 font-bold text-sky-400 flex items-center gap-4 cursor-pointer hover:bg-white/10 transition" data-group-ids="${i.groupItemsIds}" data-group-checked="${allC?'1':'0'}" onclick="togG('${i.groupItemsIds}', event)"><input type="checkbox" class="w-5 h-5 accent-sky-500 cursor-pointer flex-shrink-0 pointer-events-none" ${allC?'checked':''}><span class="text-lg truncate select-none">${esc(i.groupTitle)}</span></div>`;
             lg=i.groupItemsIds;
         }
 
@@ -719,7 +722,7 @@ function renderMore(count = PAGE_SIZE) {
         const pathRow = st.m === 'duration'
             ? `<div class="duration-top-row">${durationMeta}${durationActions}</div>`
             : `<div class="duration-top-row"><div class="duration-top-meta"><div class="duration-path-block break-all text-xs text-slate-400 font-mono leading-tight">${subT}</div></div>${otherActions}</div>`;
-        h+=`<div class="res-item ${k?'checked':''}" data-emby-id="${i.emby_id}" data-group-ids="${i.groupItemsIds}" onclick="tog(${st.loaded + idx}, event)"><div class="w-8 text-center text-xl flex-shrink-0" data-role="item-check">${k?'✅':'⬜'}</div>${img}<div class="flex-1 px-4 min-w-0"><div class="font-bold truncate text-white text-base flex items-center gap-2">${i.name} ${tags}</div>${pathRow}<div class='text-[10px] mt-1 text-slate-500 font-mono'><span class="text-sky-300 font-bold mr-1">${(i.size/1e6).toFixed(1)}MB</span></div></div>${jI}</div>`
+        h+=`<div class="res-item ${k?'checked':''}" data-emby-id="${i.emby_id}" data-group-ids="${i.groupItemsIds}" onclick="tog(${st.loaded + idx}, event)"><div class="w-8 text-center text-xl flex-shrink-0" data-role="item-check">${k?'✅':'⬜'}</div>${img}<div class="flex-1 px-4 min-w-0"><div class="font-bold truncate text-white text-base flex items-center gap-2">${esc(i.name)} ${tags}</div>${pathRow}<div class='text-[10px] mt-1 text-slate-500 font-mono'><span class="text-sky-300 font-bold mr-1">${(i.size/1e6).toFixed(1)}MB</span></div></div>${jI}</div>`
         
         if (idx === slice.length - 1 || slice[idx+1].groupItemsIds !== i.groupItemsIds) {
              h+=`</div>`; 
@@ -826,17 +829,24 @@ async function ignoreItemDirect(id, e){
 }
 async function deleteDurationItemDirect(id, e){
     e.stopPropagation();
+    const item = st.d.flatMap(g=>g.items).find(x=>x.emby_id===id);
+    if(!item){toast('❌ 条目不存在');return}
+    return deleteOneConfirmed(id, item);
+}
+// 单条删除：等服务端确认删成功再更新界面，失败就报错并保留条目
+async function deleteOneConfirmed(id, item){
+    toast(`⚡ 正在删除：${item.name||id}`);
     try{
-        const item = st.d.flatMap(g=>g.items).find(x=>x.emby_id===id);
-        if(!item){toast('❌ 条目不存在');return}
-        removeItemsFromState([id]);
-        toast(`⚡ 正在删除：${item.name||id}`);
         const resp = await fetch('/api/delete',{
             method:'POST',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({ids:[id]})
         });
-        if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json().catch(()=>({}));
+        if(!resp.ok) throw new Error(data.detail||data.message||`HTTP ${resp.status}`);
+        const failed = (data.failed||[])[0];
+        if(failed) throw new Error(failed.reason||'删除失败');
+        removeItemsFromState([id]);
         toast(`✅ 已删除：${item.name||id}`);
         poll();
     }catch(err){
@@ -846,27 +856,13 @@ async function deleteDurationItemDirect(id, e){
 }
 async function deleteItemDirect(id, e){
     e.stopPropagation();
-    try{
-        const item = st.flat.find(x=>x.emby_id===id);
-        if(!item){toast('❌ 条目不存在');return}
-        removeItemsFromState([id]);
-        toast(`⚡ 正在删除：${item.name||id}`);
-        const resp = await fetch('/api/delete',{
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({ids:[id]})
-        });
-        if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        toast(`✅ 已删除：${item.name||id}`);
-        poll();
-    }catch(err){
-        console.error(err);
-        toast(`❌ 删除失败: ${err.message||err}`);
-    }
+    const item = st.flat.find(x=>x.emby_id===id);
+    if(!item){toast('❌ 条目不存在');return}
+    return deleteOneConfirmed(id, item);
 }
-async function del() { const run=async()=>{const ids=Array.from(st.s);if(!ids.length)return;st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0);prepareDerivedData();st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden');toast('⚡ 正在执行删除...');await fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});poll()}; if(prefConfirmEnabled()) previewBatch('批量删除', run); else run() }
+async function del() { const run=async()=>{const ids=Array.from(st.s);if(!ids.length)return;toast('⚡ 正在执行删除...');try{const resp=await fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});const data=await resp.json().catch(()=>({}));if(!resp.ok){toast(`❌ 删除失败: ${data.detail||data.message||('HTTP '+resp.status)}`);return}const failed=data.failed||[];const failedIds=new Set(failed.map(f=>f.id));const done=ids.filter(id=>!failedIds.has(id));if(done.length)removeItemsFromState(done);st.s.clear(); $('act-bar').classList.add('hidden');if(failed.length){toast(`⚠️ 成功 ${data.deleted||0} 个，失败 ${failed.length} 个：${failed[0].reason||''}`)}else{toast(`✅ 已删除 ${data.deleted||0} 个`)}poll()}catch(err){toast(`❌ 删除请求失败: ${err.message||err}`)}}; if(prefConfirmEnabled()) previewBatch('批量删除', run); else run() }
 async function ignoreItems(){ const run=async()=>{const ids=Array.from(st.s); if(!ids.length){toast('❌ 未勾选');return} if(st.m==='duration'){ const selected=selectedItems(); const groupKeys=[...new Set(selected.map(x=>x.groupKey).filter(Boolean))]; if(!groupKeys.length){toast('❌ 未找到当前分组标识');return} const removeIds=[...new Set(selected.flatMap(x=>x.groupRaw?.items?.map(i=>i.emby_id)||[]))]; removeItemsFromState(removeIds); st.s.clear(); $('act-bar').classList.add('hidden'); toast('✅ 已忽略当前分组'); await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({group_keys: groupKeys, mode: st.m})}); return } st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0); prepareDerivedData(); st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden'); toast('✅ 已添加忽略'); await fetch('/api/ignore',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids: ids, mode: st.m})}); }; if(prefConfirmEnabled()) previewBatch(st.m==='duration'?'批量忽略当前分组':'批量忽略', run); else await run() }
-async function refreshItems(){ const run=async()=>{const ids=Array.from(st.s);if(!ids.length){toast('❌ 未选中');return}toast('⏳ 指令下发中...');st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0);prepareDerivedData();st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden');const r=await fetch('/api/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});const res=await r.json();if(res.status==='ok')toast('✅ 指令已送达，后台正在热更新...');else toast('❌ 请求失败')}; if(prefConfirmEnabled()) previewBatch('批量刷新', run); else await run()}
+async function refreshItems(){ const run=async()=>{const ids=Array.from(st.s);if(!ids.length){toast('❌ 未选中');return}toast('⏳ 指令下发中...');st.d=st.d.map(g=>{g.items=g.items.filter(i=>!st.s.has(i.emby_id));return g}).filter(g=>['av','smart','size','duration'].includes(st.m)?g.items.length>1:g.items.length>0);prepareDerivedData();st.s.clear(); $('rbox').innerHTML=''; st.loaded=0; renderMore(); $('act-bar').classList.add('hidden');const r=await fetch('/api/refresh',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids})});const res=await r.json();if(res.status==='ok'){toast(res.fail?`⚠️ 已下发 ${res.success} 个，失败 ${res.fail} 个：${(res.failed&&res.failed[0]&&res.failed[0].reason)||''}`:`✅ 已下发 ${res.success} 个刷新（${res.mode==='full'?'全量重刮':'按需刷新'}）`)}else{toast(`❌ 刷新失败: ${res.message||'请求失败'}`)}}; if(prefConfirmEnabled()) previewBatch('批量刷新', run); else await run()}
 async function loadIgnored(){
     st.ignS.clear(); const r=await fetch('/api/ignore');let d=await r.json();
     const kw=(($('ignore-search')?.value)||'').toLowerCase().trim();
@@ -875,7 +871,7 @@ async function loadIgnored(){
     if(kw)d=d.filter(i=>`${i.name||''} ${i.emby_id||''}`.toLowerCase().includes(kw));
     const modeMap = { "av": "番号", "smart": "去重", "size": "同大", "duration": "时长", "noposter": "封面", "tiny": "极小", "global": "全局" };
     const scopeMap = { item: '单项', group: '分组' };
-    $('ignore-list').innerHTML=d.map(i=>`<div class="bg-white/5 p-3 rounded-xl border border-white/5 flex justify-between items-center"><div class="flex items-center gap-3 overflow-hidden min-w-0 flex-1"><input type="checkbox" class="ign-check w-4 h-4 accent-sky-500 cursor-pointer flex-shrink-0" value="${i.id}"><div class="flex flex-col min-w-0"><div class="truncate pr-2 text-xs text-slate-300 font-bold" title="${i.name||i.emby_id}">${i.name||i.emby_id}</div><div class="flex items-center gap-2 mt-1"><span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 font-mono">${modeMap[i.mode] || i.mode}</span><span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-mono">${scopeMap[i.scope_type] || i.scope_type || '单项'}</span><span class="text-[10px] text-slate-600 font-mono truncate">${i.scope_type==='group' ? (i.scope_key||i.emby_id) : i.emby_id}</span></div></div></div><button class="btn btn-g py-1 px-3 text-[10px] flex-shrink-0 ml-2" onclick="ignRestoreSingle(${i.id})">恢复</button></div>`).join('') || '<div class="text-slate-500 text-center py-4 text-[10px]">无匹配黑名单</div>'
+    $('ignore-list').innerHTML=d.map(i=>`<div class="bg-white/5 p-3 rounded-xl border border-white/5 flex justify-between items-center"><div class="flex items-center gap-3 overflow-hidden min-w-0 flex-1"><input type="checkbox" class="ign-check w-4 h-4 accent-sky-500 cursor-pointer flex-shrink-0" value="${i.id}"><div class="flex flex-col min-w-0"><div class="truncate pr-2 text-xs text-slate-300 font-bold" title="${esc(i.name||i.emby_id)}">${esc(i.name||i.emby_id)}</div><div class="flex items-center gap-2 mt-1"><span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 font-mono">${modeMap[i.mode] || i.mode}</span><span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-mono">${scopeMap[i.scope_type] || i.scope_type || '单项'}</span><span class="text-[10px] text-slate-600 font-mono truncate">${i.scope_type==='group' ? (i.scope_key||i.emby_id) : i.emby_id}</span></div></div></div><button class="btn btn-g py-1 px-3 text-[10px] flex-shrink-0 ml-2" onclick="ignRestoreSingle(${i.id})">恢复</button></div>`).join('') || '<div class="text-slate-500 text-center py-4 text-[10px]">无匹配黑名单</div>'
 }
 async function ignRestoreSingle(id){await fetch(`/api/ignore/${id}`,{method:'DELETE'});loadIgnored()}
 async function ignRestoreBulk(){
@@ -931,7 +927,8 @@ async function savePrefs(){
       duration_scope:st.durationScope||'dir',
       duration_precision:st.durationPrecision||'second',
       smart_keep:$('pref-smart')?.value||'reso_max',
-      confirm_batch:$('pref-confirm')?.checked?'true':'false'
+      confirm_batch:$('pref-confirm')?.checked?'true':'false',
+      refresh_full:$('pref-refresh-full')?.checked?'true':'false'
     }
   };
   const resp=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -942,7 +939,7 @@ async function savePrefs(){
 
 async function save(){
   try{
-    const payload={host:$('ch').value,user:$('cu').value,pwd:$('cp').value,webhook:$('cw').value,cron_sync:$('sync-cron-dash').value,prefs:{av_keep_priority:$('pref-av')?.value||'tag_uc',size_keep:$('pref-size')?.value||'path_long',duration_keep:$('pref-duration')?.value||'min',duration_scope:st.durationScope||'dir',duration_precision:st.durationPrecision||'second',smart_keep:$('pref-smart')?.value||'reso_max',confirm_batch:$('pref-confirm')?.checked?'true':'false'}};
+    const payload={host:$('ch').value,user:$('cu').value,pwd:$('cp').value,webhook:$('cw').value,cron_sync:$('sync-cron-dash').value,prefs:{av_keep_priority:$('pref-av')?.value||'tag_uc',size_keep:$('pref-size')?.value||'path_long',duration_keep:$('pref-duration')?.value||'min',duration_scope:st.durationScope||'dir',duration_precision:st.durationPrecision||'second',smart_keep:$('pref-smart')?.value||'reso_max',confirm_batch:$('pref-confirm')?.checked?'true':'false',refresh_full:$('pref-refresh-full')?.checked?'true':'false'}};
     const resp=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data=await resp.json().catch(()=>({}));
@@ -957,8 +954,8 @@ async function save(){
   }
 }
 async function saveSyncDash(){const ok=await save(); if(ok) await loadTasks()}
-async function lc(){const c=await(await fetch('/api/config')).json();if(c.host&&!c.host.startsWith('http'))c.host='http://'+c.host;if(c.host&&c.host.endsWith('/'))c.host=c.host.slice(0,-1);appConfig=c;$('ch').value=c.host;$('cu').value=c.user;$('cw').value=c.webhook;$('sync-cron-dash').value=c.cron_sync; const p=c.prefs||{}; setDurationScope(['dir','library'].includes(p.duration_scope)?p.duration_scope:'dir'); setDurationPrecision(['second','centisecond'].includes(p.duration_precision)?p.duration_precision:'second'); if($('pref-av')) $('pref-av').value=['tag_uc','tag_c','tag_raw'].includes(p.av_keep_priority)?p.av_keep_priority:'tag_uc'; if($('pref-size')) $('pref-size').value=['path_long','path_short','name_long','name_short'].includes(p.size_keep)?p.size_keep:'path_long'; if($('pref-duration')) $('pref-duration').value=['min','max'].includes(p.duration_keep)?p.duration_keep:'min'; if($('pref-smart')) $('pref-smart').value=['reso_max','reso_min'].includes(p.smart_keep)?p.smart_keep:'reso_max'; if($('pref-confirm')) $('pref-confirm').checked=(p.confirm_batch||'true')==='true'}
+async function lc(){const c=await(await fetch('/api/config')).json();if(c.host&&!c.host.startsWith('http'))c.host='http://'+c.host;if(c.host&&c.host.endsWith('/'))c.host=c.host.slice(0,-1);appConfig=c;$('ch').value=c.host;$('cu').value=c.user;$('cw').value=c.webhook;$('sync-cron-dash').value=c.cron_sync; const p=c.prefs||{}; setDurationScope(['dir','library'].includes(p.duration_scope)?p.duration_scope:'dir'); setDurationPrecision(['second','centisecond'].includes(p.duration_precision)?p.duration_precision:'second'); if($('pref-av')) $('pref-av').value=['tag_uc','tag_c','tag_raw'].includes(p.av_keep_priority)?p.av_keep_priority:'tag_uc'; if($('pref-size')) $('pref-size').value=['path_long','path_short','name_long','name_short'].includes(p.size_keep)?p.size_keep:'path_long'; if($('pref-duration')) $('pref-duration').value=['min','max'].includes(p.duration_keep)?p.duration_keep:'min'; if($('pref-smart')) $('pref-smart').value=['reso_max','reso_min'].includes(p.smart_keep)?p.smart_keep:'reso_max'; if($('pref-confirm')) $('pref-confirm').checked=(p.confirm_batch||'true')==='true'; if($('pref-refresh-full')) $('pref-refresh-full').checked=(p.refresh_full||'false')==='true'}
 async function testWebhook(){try{const resp=await fetch('/api/test_webhook',{method:'POST'}); if(!resp.ok) throw new Error(`HTTP ${resp.status}`); toast('🔔 Webhook 测试已发送')}catch(e){toast(`❌ Webhook 测试失败: ${e.message||e}`)}}
-async function ll(){const r=await(await fetch('/api/logs')).json();$('lbox').innerHTML=r.map(l=>`<div class="log-line border-b border-white/5 py-1 break-all whitespace-pre-wrap">${l}</div>`).join('');$('lbox').scrollTop=$('lbox').scrollHeight}
-async function clearLogs(){try{const resp=await fetch('/api/logs/clear',{method:'POST'}); if(!resp.ok) throw new Error(`HTTP ${resp.status}`); await ll()}catch(e){toast(`❌ 清空日志失败: ${e.message||e}`)}}
+async function ll(){try{const since=st.logSeq||0;const r=await(await fetch('/api/logs?since='+since)).json();const lines=Array.isArray(r)?r:(r.lines||[]);const html=lines.map(l=>`<div class="log-line border-b border-white/5 py-1 break-all whitespace-pre-wrap">${esc(l)}</div>`).join('');if(Array.isArray(r)){$('lbox').innerHTML=html;st.logSeq=r.length}else{$('lbox').insertAdjacentHTML('beforeend',html);st.logSeq=r.total}$('lbox').scrollTop=$('lbox').scrollHeight}catch(e){}}
+async function clearLogs(){try{const resp=await fetch('/api/logs/clear',{method:'POST'}); if(!resp.ok) throw new Error(`HTTP ${resp.status}`); st.logSeq=0; $('lbox').innerHTML=''; await ll()}catch(e){toast(`❌ 清空日志失败: ${e.message||e}`)}}
 </script></body></html>
