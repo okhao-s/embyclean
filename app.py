@@ -180,6 +180,7 @@ def _chunked(seq, size):
         yield seq[i:i + size]
 
 
+PRUNE_ENABLED = str(os.getenv("PRUNE_ENABLED", "true")).lower() in {"1", "true", "yes", "on"}
 PRUNE_MIN_INTERVAL = float(os.getenv("PRUNE_MIN_INTERVAL", "300"))
 _last_prune_at = 0.0
 
@@ -191,7 +192,7 @@ async def prune_missing_media_items(candidate_ids: List[str], trigger: str = "sc
         return 0
     # 每 5 分钟最多反查一次远端，且同步期间不掺和：扫描很频繁时这个反查会把 Emby 打成筛子
     now = time.time()
-    if now - _last_prune_at < PRUNE_MIN_INTERVAL or sync_lock.locked():
+    if not PRUNE_ENABLED or now - _last_prune_at < PRUNE_MIN_INTERVAL or sync_lock.locked():
         return 0
     _last_prune_at = now
 

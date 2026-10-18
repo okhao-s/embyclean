@@ -157,19 +157,22 @@ def _group_duration_duplicates(items, ignored_group_keys=None, scope: str = 'dir
     return grouped
 
 
-def _duration_candidate_duration_keys_query(db, precision: str = 'second', lib_ids=None):
+def _duration_candidate_duration_keys_query(db, precision: str = 'second', lib_ids=None, ignored_emby_ids=None):
     precision = _normalize_duration_precision(precision)
     multiplier = 100.0 if precision == 'centisecond' else 1.0
     duration_key_expr = func.round(MediaItem.duration * multiplier, 0) / multiplier
     q = db.query(duration_key_expr.label('duration_key')).filter(MediaItem.duration > 0.1)
     if lib_ids:
         q = q.filter(MediaItem.library_id.in_(lib_ids))
+    # 与取数一致的忽略筛选：否则「两条忽略一条」仍会进候选，最后剩单条分组
+    if ignored_emby_ids:
+        q = q.filter(~MediaItem.emby_id.in_(ignored_emby_ids))
     return q.group_by(duration_key_expr).having(func.count(MediaItem.id) > 1)
 
 
 def _duration_candidate_items_query(db, ignored_emby_ids, precision: str = 'second', lib_ids=None):
     precision = _normalize_duration_precision(precision)
-    candidate_duration_keys = _duration_candidate_duration_keys_query(db, precision, lib_ids).subquery()
+    candidate_duration_keys = _duration_candidate_duration_keys_query(db, precision, lib_ids, ignored_emby_ids).subquery()
     multiplier = 100.0 if precision == 'centisecond' else 1.0
     duration_key_expr = func.round(MediaItem.duration * multiplier, 0) / multiplier
     q = db.query(MediaItem).join(
@@ -201,7 +204,12 @@ def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0", dura
                 grp.setdefault(key, []).append(r)
         grouped = [{"title": k, "items": v} for k, v in grp.items() if len(v) > 1]
     elif mode == "size":
-        sub = db.query(MediaItem.size).filter(MediaItem.size > 0).group_by(MediaItem.size).having(func.count(MediaItem.id) > 1)
+        sub_q = db.query(MediaItem.size).filter(MediaItem.size > 0)
+        if ignored:
+            sub_q = sub_q.filter(~MediaItem.emby_id.in_(ignored))
+        if lib_ids:
+            sub_q = sub_q.filter(MediaItem.library_id.in_(lib_ids))
+        sub = sub_q.group_by(MediaItem.size).having(func.count(MediaItem.id) > 1)
         rows = q.filter(MediaItem.size.in_(sub)).all(); grp = {}
         for r in rows:
             grp.setdefault(r.size, []).append(r)
@@ -220,12 +228,14 @@ def perform_internal_scan(db, mode, lib_str="", param_s="100", param_d="0", dura
         # TMDB 查重：按 Emby 的 ProviderIds.Tmdb 分组，同一个 TMDB ID 出现多次就是重复件
         # （同一部片子在不同库里各存一份、或者同一库里留了多版本都会被归到一组）。
         # 没有 TMDB 标识的条目不参与，避免像旧版那样按名字误判。
-        sub = (
-            db.query(MediaItem.tmdb_id)
-            .filter(MediaItem.tmdb_id.isnot(None), MediaItem.tmdb_id != "")
-            .group_by(MediaItem.tmdb_id)
-            .having(func.count(MediaItem.id) > 1)
-        )
+        # 重复判定必须和取数用同一套筛选：否则「两条里忽略掉一条」或「另一条在别的库」
+        # 仍会被判成重复组，页面上就出现只有单条的分组。
+        sub_q = db.query(MediaItem.tmdb_id).filter(MediaItem.tmdb_id.isnot(None), MediaItem.tmdb_id != "")
+        if ignored:
+            sub_q = sub_q.filter(~MediaItem.emby_id.in_(ignored))
+        if lib_ids:
+            sub_q = sub_q.filter(MediaItem.library_id.in_(lib_ids))
+        sub = sub_q.group_by(MediaItem.tmdb_id).having(func.count(MediaItem.id) > 1)
         rows = q.filter(MediaItem.tmdb_id.in_(sub)).all()
         no_tmdb = q.filter((MediaItem.tmdb_id == "") | (MediaItem.tmdb_id.is_(None))).count()
         if no_tmdb:
