@@ -448,6 +448,13 @@ input::placeholder { color: var(--text-soft) !important; opacity: .78; }
      <div><label class="block text-slate-400 mb-2 font-bold text-xs uppercase tracking-wider">通知 Webhook</label><div class="flex gap-3"><input id="cw" class="flex-1"><button class="btn btn-g px-6" onclick="testWebhook()">Test</button></div><div class="mt-3 text-xs leading-6 text-slate-400 bg-white/5 border border-white/5 rounded-xl px-4 py-3"><div class="font-bold text-slate-300 mb-1">使用实例</div><div>支持 <span class="font-bold text-slate-200">MP消息转发插件</span>，Webhook 可填写为：</div><div class="mt-2 font-mono break-all text-[11px] text-sky-300">http://ip:port/api/v1/plugin/MsgNotify/send_json?apikey=mp秘钥</div></div></div>
      <button class="btn btn-p w-full py-4 text-lg font-bold mt-4" onclick="save()">💾 保存配置</button>
      <div class="flex items-center gap-4 mt-4 bg-white/5 p-4 rounded-xl border border-white/5"><div class="flex-1"><label class="block text-xs font-bold text-slate-500 mb-1">全量更新定时</label><input id="sync-cron-dash" placeholder="0 4 * * *" class="text-xs p-3"></div><button class="btn btn-g h-full px-6 text-xs" onclick="saveSyncDash()">更新计划</button></div>
+     <div class="mt-4 bg-white/5 p-4 rounded-xl border border-white/5"><label class="block text-xs font-bold text-slate-500 mb-3">界面布局</label>
+        <div class="grid grid-cols-2 gap-3">
+          <button class="btn btn-g py-3 text-sm" onclick="switchLayout('classic')">经典布局（当前）</button>
+          <button class="btn btn-p py-3 text-sm" onclick="switchLayout('studio')">🎛 Studio 新版</button>
+        </div>
+        <div class="text-xs text-slate-400 mt-2">两套布局功能完全一致，随时可切回；配色主题只作用于经典布局。</div>
+     </div>
      <div class="mt-4 bg-white/5 p-4 rounded-xl border border-white/5"><label class="block text-xs font-bold text-slate-500 mb-3">界面风格</label>
         <div class="theme-grid">
           <div class="theme-option" data-theme-option="obsidian" onclick="setTheme('obsidian')"><div class="theme-preview obsidian"></div><div class="font-bold text-sm">Obsidian Pro</div><div class="text-xs text-slate-400 mt-1">冷峻、深色、稳一点</div></div>
@@ -1014,6 +1021,14 @@ async function save(){
 }
 async function saveSyncDash(){const ok=await save(); if(ok) await loadTasks()}
 async function lc(){const c=await(await fetch('/api/config')).json();if(c.host&&!c.host.startsWith('http'))c.host='http://'+c.host;if(c.host&&c.host.endsWith('/'))c.host=c.host.slice(0,-1);appConfig=c;$('ch').value=c.host;$('cu').value=c.user;$('cw').value=c.webhook;$('sync-cron-dash').value=c.cron_sync; const p=c.prefs||{}; setDurationScope(['dir','library'].includes(p.duration_scope)?p.duration_scope:'dir'); setDurationPrecision(['second','centisecond'].includes(p.duration_precision)?p.duration_precision:'second'); if($('pref-av')) $('pref-av').value=['tag_uc','tag_c','tag_raw'].includes(p.av_keep_priority)?p.av_keep_priority:'tag_uc'; if($('pref-size')) $('pref-size').value=['path_long','path_short','name_long','name_short'].includes(p.size_keep)?p.size_keep:'path_long'; if($('pref-duration')) $('pref-duration').value=['min','max'].includes(p.duration_keep)?p.duration_keep:'min'; if($('pref-smart')) $('pref-smart').value=['reso_max','reso_min'].includes(p.smart_keep)?p.smart_keep:'reso_max'; if($('pref-confirm')) $('pref-confirm').checked=(p.confirm_batch||'true')==='true'; if($('pref-refresh-full')) $('pref-refresh-full').checked=(p.refresh_full||'false')==='true'}
+async function switchLayout(layout){
+  try{
+    const r = await fetch('/api/ui',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({layout})});
+    const d = await r.json();
+    if(d.ok===false) throw new Error(d.message||'切换失败');
+    location.href='/';
+  }catch(e){ toast(`❌ 切换失败: ${e.message||e}`) }
+}
 async function testWebhook(){try{const resp=await fetch('/api/test_webhook',{method:'POST'}); if(!resp.ok) throw new Error(`HTTP ${resp.status}`); toast('🔔 Webhook 测试已发送')}catch(e){toast(`❌ Webhook 测试失败: ${e.message||e}`)}}
 async function ll(){try{const since=st.logSeq||0;const r=await(await fetch('/api/logs?since='+since)).json();const lines=Array.isArray(r)?r:(r.lines||[]);const html=lines.map(l=>`<div class="log-line border-b border-white/5 py-1 break-all whitespace-pre-wrap">${esc(l)}</div>`).join('');if(Array.isArray(r)){$('lbox').innerHTML=html;st.logSeq=r.length}else{$('lbox').insertAdjacentHTML('beforeend',html);st.logSeq=r.total}$('lbox').scrollTop=$('lbox').scrollHeight}catch(e){}}
 async function clearLogs(){try{const resp=await fetch('/api/logs/clear',{method:'POST'}); if(!resp.ok) throw new Error(`HTTP ${resp.status}`); st.logSeq=0; $('lbox').innerHTML=''; await ll()}catch(e){toast(`❌ 清空日志失败: ${e.message||e}`)}}

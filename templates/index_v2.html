@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EmbyCleaner · Studio</title>
+<style>
+:root{
+  --bg:#0b0f14; --bg2:#0f151d; --panel:#141b24; --panel2:#1a222d;
+  --line:rgba(255,255,255,.07); --line2:rgba(255,255,255,.12);
+  --txt:#e8eef6; --dim:#8b9bb0; --dim2:#5f7183;
+  --accent:#ffb454; --accent2:#5ad1c5; --danger:#ff6b81; --ok:#4ade80;
+  --r:16px; --r-sm:10px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:
+  radial-gradient(1200px 600px at 85% -10%, rgba(255,180,84,.08), transparent 60%),
+  radial-gradient(900px 500px at 0% 100%, rgba(90,209,197,.06), transparent 55%),
+  var(--bg);
+  color:var(--txt);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  display:flex;overflow:hidden}
+button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}
+input,select{font:inherit;color:var(--txt);background:var(--panel2);border:1px solid var(--line2);border-radius:var(--r-sm);padding:9px 11px;outline:none;width:100%}
+input:focus,select:focus{border-color:var(--accent)}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:#243040;border-radius:10px}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ── 左侧图标栏 ── */
+.rail{width:76px;flex:0 0 76px;background:linear-gradient(180deg,var(--bg2),#0a0e13);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 0;z-index:20}
+.rail .logo{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;font-size:20px;
+  background:linear-gradient(135deg,var(--accent),#ff8a3d);color:#1a1206;font-weight:900;margin-bottom:10px}
+.rail-btn{width:52px;height:52px;border-radius:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:2px;color:var(--dim);transition:.18s;font-size:9px;letter-spacing:.02em}
+.rail-btn .ico{font-size:19px;line-height:1}
+.rail-btn:hover{background:var(--panel);color:var(--txt)}
+.rail-btn.on{background:var(--panel2);color:var(--accent);box-shadow:inset 0 0 0 1px var(--line2)}
+.rail-sep{width:26px;height:1px;background:var(--line);margin:6px 0}
+.rail .grow{flex:1}
+
+/* ── 主区 ── */
+.shell{flex:1;display:flex;flex-direction:column;min-width:0}
+.topbar{height:64px;flex:0 0 64px;display:flex;align-items:center;gap:14px;padding:0 22px;border-bottom:1px solid var(--line);
+  background:rgba(11,15,20,.75);backdrop-filter:blur(12px);z-index:15}
+.brand{font-weight:800;font-size:15px;letter-spacing:.01em}
+.brand span{color:var(--accent)}
+.kpis{display:flex;gap:8px;margin-left:6px;flex-wrap:wrap}
+.kpi{display:flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--line);border-radius:999px;
+  padding:5px 12px;font-size:12px;color:var(--dim)}
+.kpi b{color:var(--txt);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.dot{width:7px;height:7px;border-radius:50%;background:#3d4b5c}
+.dot.on{background:var(--ok);box-shadow:0 0 8px rgba(74,222,128,.6)}
+.topbar .spacer{flex:1}
+.btn{border-radius:var(--r-sm);padding:9px 14px;font-size:13px;font-weight:600;transition:.18s;border:1px solid transparent}
+.btn-ghost{background:var(--panel);border-color:var(--line2);color:var(--txt)}
+.btn-ghost:hover{border-color:var(--accent);color:var(--accent)}
+.btn-main{background:linear-gradient(135deg,var(--accent),#ff9a3d);color:#1a1206}
+.btn-main:hover{filter:brightness(1.06)}
+.btn-danger{background:rgba(255,107,129,.12);color:var(--danger);border-color:rgba(255,107,129,.35)}
+.btn-sm{padding:6px 10px;font-size:12px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+
+.canvas{flex:1;overflow-y:auto;padding:26px 28px 120px}
+.view{display:none;animation:in .25s ease}
+.view.on{display:block}
+@keyframes in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* ── 清理页 ── */
+.hero{margin-bottom:22px}
+.hero h1{margin:0 0 6px;font-size:26px;letter-spacing:-.01em}
+.hero p{margin:0;color:var(--dim);font-size:13px}
+.mode-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px;margin:20px 0}
+.mode-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px;text-align:left;
+  transition:.18s;position:relative;overflow:hidden}
+.mode-card:hover{border-color:var(--line2);transform:translateY(-2px)}
+.mode-card.on{border-color:var(--accent);background:linear-gradient(160deg,rgba(255,180,84,.12),var(--panel))}
+.mode-card .em{font-size:24px}
+.mode-card .nm{font-weight:700;margin-top:8px;font-size:14px}
+.mode-card .ds{color:var(--dim2);font-size:11.5px;margin-top:3px;line-height:1.45}
+.mode-card .tick{position:absolute;top:12px;right:12px;color:var(--accent);font-size:15px;opacity:0}
+.mode-card.on .tick{opacity:1}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:18px}
+.panel + .panel{margin-top:14px}
+.panel h3{margin:0 0 14px;font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:var(--dim)}
+.field{display:flex;flex-direction:column;gap:6px}
+.field label{font-size:11.5px;color:var(--dim)}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+.row > .field{flex:1;min-width:170px}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{border:1px solid var(--line2);background:var(--panel2);border-radius:999px;padding:7px 14px;font-size:12.5px;color:var(--dim);transition:.15s}
+.chip:hover{border-color:var(--accent)}
+.chip.on{background:rgba(255,180,84,.14);border-color:var(--accent);color:var(--accent);font-weight:700}
+.scan-cta{display:flex;align-items:center;gap:14px;margin-top:18px}
+.scan-cta .hint{color:var(--dim2);font-size:12px}
+
+/* ── 结果页 ── */
+.res-head{position:sticky;top:-26px;margin:-26px -28px 18px;padding:16px 28px;background:rgba(11,15,20,.92);
+  backdrop-filter:blur(10px);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;flex-wrap:wrap;z-index:10}
+.res-head .cnt{font-size:13px;color:var(--dim)}
+.res-head .cnt b{color:var(--txt);font-family:ui-monospace,monospace}
+.res-head .spacer{flex:1}
+.progress{width:220px;flex:0 0 auto;display:none}
+.progress.on{display:block}
+.progress .ph{display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-bottom:5px;gap:8px}
+.progress .pt{height:5px;background:rgba(255,255,255,.08);border-radius:99px;overflow:hidden}
+.progress .pf{height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .25s}
+.group{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);margin-bottom:12px;overflow:hidden}
+.group-h{display:flex;align-items:center;gap:12px;padding:13px 16px;cursor:pointer;border-bottom:1px solid transparent}
+.group.open .group-h{border-bottom-color:var(--line)}
+.group-h .cb{width:18px;height:18px;accent-color:var(--accent);cursor:pointer;flex:0 0 auto}
+.group-h .ttl{font-weight:700;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.group-h .meta{margin-left:auto;display:flex;gap:8px;align-items:center;flex:0 0 auto}
+.tag{font-size:10.5px;padding:2px 8px;border-radius:999px;border:1px solid var(--line2);color:var(--dim)}
+.tag.keep{color:var(--ok);border-color:rgba(74,222,128,.35);background:rgba(74,222,128,.1)}
+.tag.del{color:var(--danger);border-color:rgba(255,107,129,.35);background:rgba(255,107,129,.1)}
+.items{display:none}
+.group.open .items{display:block}
+.item{display:flex;align-items:center;gap:12px;padding:11px 16px;border-top:1px solid var(--line)}
+.item:hover{background:rgba(255,255,255,.02)}
+.item.sel{background:rgba(255,180,84,.07)}
+.item .cb{width:18px;height:18px;accent-color:var(--accent);cursor:pointer;flex:0 0 auto}
+.thumb{width:46px;height:64px;border-radius:8px;object-fit:cover;background:#1d2632;flex:0 0 auto}
+.thumb.ph{display:grid;place-items:center;color:var(--dim2);font-size:16px}
+.item .body{flex:1;min-width:0}
+.item .nm{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item .pth{font-family:ui-monospace,monospace;font-size:11px;color:var(--dim2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
+.item .facts{display:flex;gap:10px;color:var(--dim);font-size:11px;margin-top:4px;flex-wrap:wrap}
+.item .facts b{color:var(--txt);font-family:ui-monospace,monospace;font-weight:600}
+.item .why{color:var(--dim);font-size:11px;margin-top:3px}
+.badge{font-size:10px;padding:1px 6px;border-radius:6px;font-weight:700;border:1px solid}
+.badge.c{color:#6ec6ff;border-color:rgba(110,198,255,.35);background:rgba(110,198,255,.1)}
+.badge.uc{color:var(--danger);border-color:rgba(255,107,129,.35);background:rgba(255,107,129,.1)}
+.badge.u{color:#c084fc;border-color:rgba(192,132,252,.35);background:rgba(192,132,252,.1)}
+.empty{padding:60px 20px;text-align:center;color:var(--dim2)}
+.empty .em{font-size:34px;display:block;margin-bottom:10px}
+
+/* ── 任务页 ── */
+.task{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;margin-bottom:10px;
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.task .t-main{flex:1;min-width:220px}
+.task .t-name{font-weight:700;font-size:13.5px}
+.task .t-sub{color:var(--dim);font-size:11.5px;margin-top:3px;display:flex;gap:10px;flex-wrap:wrap}
+.task .t-actions{display:flex;gap:8px;flex-wrap:wrap}
+
+/* ── 设置页 ── */
+.settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
+.seg{display:inline-flex;background:var(--panel2);border:1px solid var(--line2);border-radius:999px;padding:3px;gap:2px}
+.seg button{padding:6px 14px;border-radius:999px;font-size:12.5px;color:var(--dim)}
+.seg button.on{background:var(--accent);color:#1a1206;font-weight:700}
+
+/* ── 底部操作坞 ── */
+.dock{position:fixed;left:50%;bottom:22px;transform:translate(-50%,140%);display:flex;gap:8px;align-items:center;
+  background:rgba(20,27,36,.96);border:1px solid var(--line2);border-radius:999px;padding:8px 10px;
+  box-shadow:0 18px 40px -18px rgba(0,0,0,.8);transition:transform .22s;z-index:40;backdrop-filter:blur(10px)}
+.dock.on{transform:translate(-50%,0)}
+.dock .sel{font-size:12px;color:var(--dim);padding:0 8px}
+.dock .sel b{color:var(--accent);font-family:ui-monospace,monospace}
+
+/* ── 弹层 ── */
+.modal{position:fixed;inset:0;background:rgba(4,7,10,.72);backdrop-filter:blur(6px);display:none;place-items:center;z-index:60;padding:20px}
+.modal.on{display:grid}
+.modal .card{background:var(--panel);border:1px solid var(--line2);border-radius:18px;padding:22px;width:min(560px,100%)}
+.modal h3{margin:0 0 16px;font-size:17px}
+.modal .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
+.modal .stat{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.modal .stat .k{font-size:11px;color:var(--dim)}
+.modal .stat .v{font-size:16px;font-weight:800;margin-top:2px}
+.modal .foot{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+
+/* ── 日志抽屉 ── */
+.drawer{position:fixed;top:0;right:0;height:100%;width:min(680px,92vw);background:var(--bg2);border-left:1px solid var(--line2);
+  transform:translateX(102%);transition:transform .25s;z-index:70;display:flex;flex-direction:column}
+.drawer.on{transform:none}
+.drawer .dh{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.drawer .dh .spacer{flex:1}
+.drawer .db{flex:1;overflow:auto;padding:12px 16px;font-family:ui-monospace,monospace;font-size:11.5px;color:#9fb0c3;line-height:1.7}
+.drawer .db div{border-bottom:1px solid rgba(255,255,255,.04);padding:2px 0;white-space:pre-wrap;word-break:break-all}
+
+/* ── Toast ── */
+#toasts{position:fixed;top:16px;right:20px;display:flex;flex-direction:column;gap:8px;z-index:90;pointer-events:none}
+.toast{background:rgba(20,27,36,.97);border:1px solid var(--line2);border-left:3px solid var(--accent);border-radius:10px;
+  padding:10px 14px;font-size:12.5px;box-shadow:0 12px 30px -12px rgba(0,0,0,.7);animation:tin .2s ease}
+@keyframes tin{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+
+@media (max-width:820px){
+  .rail{width:60px;flex-basis:60px}
+  .rail-btn{width:44px;height:46px}
+  .canvas{padding:18px 16px 120px}
+  .kpis{display:none}
+  .res-head{top:-18px;margin:-18px -16px 14px;padding:12px 16px}
+  .modal .grid2{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<aside class="rail">
+  <div class="logo">EC</div>
+  <button class="rail-btn on" data-nav="clean"><span class="ico">🧹</span>清理</button>
+  <button class="rail-btn" data-nav="tasks"><span class="ico">🗓️</span>计划</button>
+  <button class="rail-btn" data-nav="settings"><span class="ico">⚙️</span>设置</button>
+  <div class="rail-sep"></div>
+  <button class="rail-btn" id="btn-logs"><span class="ico">📜</span>日志</button>
+  <div class="grow"></div>
+  <button class="rail-btn" id="btn-classic" title="切回经典界面"><span class="ico">↩︎</span>经典</button>
+</aside>
+
+<div class="shell">
+  <header class="topbar">
+    <div class="brand">Emby<span>Cleaner</span> · Studio</div>
+    <div class="kpis">
+      <div class="kpi"><span class="dot" id="k-dot"></span><span id="k-conn">未连接</span></div>
+      <div class="kpi">缓存 <b id="k-cache">0</b></div>
+      <div class="kpi">已清理 <b id="k-cleaned">0</b></div>
+      <div class="kpi">释放 <b id="k-saved">0 B</b></div>
+      <div class="kpi">Emby <b id="k-rpm">0</b>/min</div>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn btn-ghost btn-sm" id="btn-sync">🔄 同步元数据</button>
+  </header>
+
+  <main class="canvas">
+    <!-- 清理 -->
+    <section class="view on" id="view-clean">
+      <div class="hero">
+        <h1>选择一种查重方式</h1>
+        <p>基于本地缓存扫描，不会直接动 Emby 库；确认后才会执行删除。</p>
+      </div>
+      <div class="mode-grid" id="mode-grid"></div>
+
+      <div class="panel">
+        <h3>扫描范围</h3>
+        <div class="chips" id="lib-chips"><span class="chip on" data-lib="">全部媒体库</span></div>
+        <div class="row" style="margin-top:16px" id="opt-row"></div>
+      </div>
+
+      <div class="scan-cta">
+        <button class="btn btn-main" id="btn-scan" style="padding:13px 26px;font-size:15px">🔍 开始扫描</button>
+        <span class="hint" id="scan-hint">选择模式后开始</span>
+      </div>
+    </section>
+
+    <!-- 结果 -->
+    <section class="view" id="view-results">
+      <div class="res-head">
+        <button class="btn btn-ghost btn-sm" id="btn-back">← 返回</button>
+        <div class="cnt">已展示 <b id="rc-shown">0</b> / 共 <b id="rc-total">0</b> 项 · <b id="rc-groups">0</b> 组</div>
+        <div class="spacer"></div>
+        <div class="progress" id="progress">
+          <div class="ph"><span id="p-text">处理中</span><span id="p-pct">0%</span></div>
+          <div class="pt"><div class="pf" id="p-fill"></div></div>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="btn-pick-all">全选已展示</button>
+        <button class="btn btn-ghost btn-sm" id="btn-pick-none">全不选</button>
+        <button class="btn btn-ghost btn-sm" id="btn-pick-rec">按推荐选择</button>
+      </div>
+      <div id="groups"></div>
+      <div id="load-more" style="text-align:center;padding:10px 0 40px"></div>
+    </section>
+
+    <!-- 计划 -->
+    <section class="view" id="view-tasks">
+      <div class="hero"><h1>定时计划</h1><p>按 cron 自动扫描，结果走 Webhook 通知。</p></div>
+      <div style="margin:16px 0"><button class="btn btn-main" id="btn-task-new">＋ 新建计划</button></div>
+      <div id="task-list"></div>
+    </section>
+
+    <!-- 设置 -->
+    <section class="view" id="view-settings">
+      <div class="hero"><h1>设置</h1><p>连接信息、推荐偏好、界面风格。</p></div>
+      <div class="settings-grid" style="margin-top:18px">
+        <div class="panel">
+          <h3>Emby 连接</h3>
+          <div class="field" style="margin-bottom:10px"><label>服务器地址</label><input id="c-host" placeholder="http://192.168.1.10:8096"></div>
+          <div class="row">
+            <div class="field"><label>用户名</label><input id="c-user"></div>
+            <div class="field"><label>密码</label><input id="c-pwd" type="password" placeholder="留空则不修改"></div>
+          </div>
+          <div class="field" style="margin-top:10px"><label>Webhook</label><input id="c-webhook" placeholder="https://..."></div>
+          <div class="field" style="margin-top:10px"><label>系统同步 cron</label><input id="c-cron" placeholder="0 4 * * *"></div>
+          <div style="margin-top:14px;display:flex;gap:8px">
+            <button class="btn btn-main" id="btn-save-conn">保存</button>
+            <button class="btn btn-ghost" id="btn-test-hook">测试 Webhook</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h3>推荐偏好</h3>
+          <div class="row">
+            <div class="field"><label>番号查重保留</label><select id="p-av">
+              <option value="tag_uc">选 [UC]</option><option value="tag_c">选 [C]</option><option value="tag_raw">选原版</option></select></div>
+            <div class="field"><label>同大查重保留</label><select id="p-size">
+              <option value="path_long">最长路径</option><option value="path_short">最短路径</option>
+              <option value="name_long">最长名称</option><option value="name_short">最短名称</option></select></div>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <div class="field"><label>时长查重保留</label><select id="p-dur">
+              <option value="min">最小文件</option><option value="max">最大文件</option></select></div>
+            <div class="field"><label>TMDB 查重保留</label><select id="p-tmdb">
+              <option value="reso_max">最高分辨率</option><option value="reso_min">最低分辨率</option></select></div>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <div class="field"><label>时长对比范围</label><select id="p-scope">
+              <option value="dir">同目录</option><option value="library">同库</option></select></div>
+            <div class="field"><label>时长精度</label><select id="p-prec">
+              <option value="second">整秒</option><option value="centisecond">两位小数</option></select></div>
+          </div>
+          <label style="display:flex;gap:8px;align-items:center;margin-top:14px;font-size:12.5px;color:var(--dim)">
+            <input type="checkbox" id="p-confirm" style="width:16px;height:16px;accent-color:var(--accent)"> 批量操作前二次确认
+          </label>
+          <label style="display:flex;gap:8px;align-items:flex-start;margin-top:8px;font-size:12px;color:var(--dim2)">
+            <input type="checkbox" id="p-full" style="width:16px;height:16px;accent-color:var(--accent);margin-top:2px">
+            <span>重新刮削走全量模式（Recursive + ReplaceAll）。会显著加重 Emby 负担。</span>
+          </label>
+          <div style="margin-top:14px"><button class="btn btn-main" id="btn-save-prefs">保存偏好</button></div>
+        </div>
+
+        <div class="panel">
+          <h3>界面风格</h3>
+          <p style="color:var(--dim);font-size:12.5px;margin:0 0 12px">两套界面功能完全一致，随时可切换。</p>
+          <div class="seg" id="ui-seg">
+            <button data-ui="classic">经典</button>
+            <button data-ui="studio" class="on">Studio（当前）</button>
+          </div>
+          <p style="color:var(--dim2);font-size:11.5px;margin-top:10px">切换后会重新加载页面。</p>
+        </div>
+
+        <div class="panel">
+          <h3>黑名单</h3>
+          <div class="row" style="margin-bottom:10px">
+            <div class="field"><input id="ign-search" placeholder="搜索名称 / Emby ID"></div>
+            <div class="field" style="max-width:150px"><select id="ign-mode">
+              <option value="">全部模式</option><option value="av">番号</option><option value="smart">TMDB</option>
+              <option value="size">同大</option><option value="duration">时长</option><option value="noposter">封面</option><option value="tiny">极小</option>
+            </select></div>
+          </div>
+          <div id="ign-list" style="max-height:320px;overflow:auto"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="dock" id="dock">
+  <span class="sel">已选 <b id="dock-n">0</b></span>
+  <button class="btn btn-ghost btn-sm" id="dock-ignore">🚫 忽略</button>
+  <button class="btn btn-ghost btn-sm" id="dock-refresh">🔄 重新刮削</button>
+  <button class="btn btn-danger btn-sm" id="dock-del">🗑️ 删除</button>
+</div>
+
+<div class="modal" id="modal"><div class="card" id="modal-card"></div></div>
+
+<div class="drawer" id="drawer">
+  <div class="dh"><b>系统日志</b><div class="spacer"></div>
+    <button class="btn btn-ghost btn-sm" id="btn-log-clear">清空</button>
+    <button class="btn btn-ghost btn-sm" id="btn-log-close">关闭</button></div>
+  <div class="db" id="log-body"></div>
+</div>
+
+<div id="toasts"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const bytes = n => { n = Number(n)||0; if(n<1024) return n+' B'; if(n<1048576) return (n/1024).toFixed(1)+' KB';
+  if(n<1073741824) return (n/1048576).toFixed(1)+' MB'; return (n/1073741824).toFixed(2)+' GB'; };
+const dur = s => { s = Number(s)||0; const h=Math.floor(s/3600), m=Math.round((s%3600)/60); return h?`${h}h${m}m`:`${m}m`; };
+
+const MODES = [
+  ['av','🔞','番号查重','按番号聚合多版本'],
+  ['smart','🎬','TMDB 查重','按 TMDB ID 跨库去重'],
+  ['size','⚖️','同大查重','同体积文件比对'],
+  ['duration','⏳','时长查重','同目录/同库时长比对'],
+  ['noposter','🖼️','缺失封面','列出没有 Primary 海报'],
+  ['tiny','🐜','极小文件','低于阈值的异常小文件'],
+];
+
+const st = {
+  mode:'av', libs:new Set(), groups:[], flat:[], selected:new Set(),
+  loaded:0, pageSize:60, busy:false, cfg:{}, tasks:[], logSeq:0, drawerOpen:false,
+  durationScope:'dir', durationPrecision:'second',
+};
+
+/* ── 通用 ── */
+function toast(msg){ const t=document.createElement('div'); t.className='toast'; t.textContent=msg;
+  $('toasts').appendChild(t); setTimeout(()=>t.remove(), 4200); }
+function modal(html){ $('modal-card').innerHTML=html; $('modal').classList.add('on'); }
+function closeModal(){ $('modal').classList.remove('on'); }
+$('modal').addEventListener('click', e => { if(e.target.id==='modal') closeModal(); });
+
+/* ── 导航 ── */
+function nav(view){
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
+  $('view-'+view).classList.add('on');
+  document.querySelectorAll('.rail-btn[data-nav]').forEach(b=>b.classList.toggle('on', b.dataset.nav===view));
+  if(view==='settings'){ loadConfig(); loadIgnored(); }
+  if(view==='tasks') loadTasks();
+  if(view!=='results') { /* dock 仅在结果页 */ }
+  $('dock').classList.toggle('on', view==='results' && st.selected.size>0);
+}
+document.querySelectorAll('.rail-btn[data-nav]').forEach(b=> b.onclick = ()=> nav(b.dataset.nav));
+$('btn-back').onclick = ()=> nav('clean');
+
+/* ── 模式卡片 ── */
+function renderModes(){
+  $('mode-grid').innerHTML = MODES.map(([k,em,nm,ds])=>`
+    <button class="mode-card ${k===st.mode?'on':''}" data-mode="${k}">
+      <span class="tick">✓</span><div class="em">${em}</div>
+      <div class="nm">${nm}</div><div class="ds">${ds}</div>
+    </button>`).join('');
+  document.querySelectorAll('.mode-card').forEach(b=> b.onclick = ()=>{
+    st.mode = b.dataset.mode; renderModes(); renderOptions();
+    $('scan-hint').textContent = MODES.find(m=>m[0]===st.mode)[2] + ' · 准备就绪';
+  });
+}
+
+/* ── 模式选项 ── */
+function renderOptions(){
+  const r = $('opt-row');
+  if(st.mode==='duration'){
+    r.innerHTML = `
+      <div class="field"><label>对比范围</label><select id="o-scope">
+        <option value="dir" ${st.durationScope==='dir'?'selected':''}>同目录</option>
+        <option value="library" ${st.durationScope==='library'?'selected':''}>同库</option></select></div>
+      <div class="field"><label>时长精度</label><select id="o-prec">
+        <option value="second" ${st.durationPrecision==='second'?'selected':''}>整秒</option>
+        <option value="centisecond" ${st.durationPrecision==='centisecond'?'selected':''}>两位小数</option></select></div>`;
+    $('o-scope').onchange = e => st.durationScope = e.target.value;
+    $('o-prec').onchange = e => st.durationPrecision = e.target.value;
+  } else if(st.mode==='tiny'){
+    r.innerHTML = `
+      <div class="field"><label>小于体积 (MB)</label><input id="o-size" value="100" type="number"></div>
+      <div class="field"><label>且时长小于 (秒，0 忽略)</label><input id="o-dur" value="0" type="number"></div>`;
+  } else {
+    r.innerHTML = `<div class="field" style="flex:1"><label>&nbsp;</label>
+      <div style="color:var(--dim2);font-size:12px">该模式无需额外参数，直接扫描本地缓存。</div></div>`;
+  }
+}
+
+/* ── 状态 ── */
+async function pollStatus(){
+  try{
+    const r = await fetch('/api/status'); const d = await r.json();
+    $('k-dot').classList.toggle('on', !!d.connected);
+    $('k-conn').textContent = d.connected ? (d.server_name||'已连接') : '未连接';
+    $('k-cache').textContent = d.local_cache ?? 0;
+    $('k-cleaned').textContent = d.cleaned_count ?? 0;
+    $('k-saved').textContent = bytes(d.saved_space);
+    $('k-rpm').textContent = d.emby_rpm ?? 0;
+    if(d.is_syncing) $('btn-sync').textContent = '⏳ 同步中…';
+    else $('btn-sync').textContent = '🔄 同步元数据';
+  }catch(e){ $('k-conn').textContent='连接异常'; }
+}
+
+/* ── 媒体库 ── */
+async function loadLibs(){
+  try{
+    const libs = await (await fetch('/api/libraries')).json();
+    const box = $('lib-chips');
+    box.innerHTML = `<span class="chip ${st.libs.size?'':'on'}" data-lib="">全部媒体库</span>` +
+      (libs||[]).map(l=>`<span class="chip ${st.libs.has(l.Id)?'on':''}" data-lib="${esc(l.Id)}">${esc(l.Name||l.Id)}</span>`).join('');
+    box.querySelectorAll('.chip').forEach(c=> c.onclick = ()=>{
+      const id = c.dataset.lib;
+      if(!id) st.libs.clear(); else st.libs.has(id) ? st.libs.delete(id) : st.libs.add(id);
+      loadLibs();
+    });
+  }catch(e){}
+}
+
+/* ── 扫描 ── */
+async function doScan(){
+  if(st.busy) return;
+  st.busy = true; $('btn-scan').disabled = true; $('btn-scan').textContent = '⏳ 扫描中…';
+  try{
+    const p = new URLSearchParams({mode:st.mode, lib:[...st.libs].join(',')});
+    if(st.mode==='tiny'){ p.set('param_s', $('o-size')?.value||'100'); p.set('param_d', $('o-dur')?.value||'0'); }
+    if(st.mode==='duration'){ p.set('duration_scope', st.durationScope); p.set('duration_precision', st.durationPrecision); }
+    const r = await fetch('/api/scan?'+p.toString());
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    st.groups = await r.json();
+    st.selected.clear(); st.loaded = 0;
+    renderResults(); nav('results');
+    $('scan-hint').textContent = `上次扫描：${st.groups.length} 组`;
+  }catch(e){ toast('❌ 扫描失败：'+(e.message||e)); }
+  finally{ st.busy = false; $('btn-scan').disabled=false; $('btn-scan').textContent='🔍 开始扫描'; }
+}
+$('btn-scan').onclick = doScan;
+
+/* ── 结果渲染 ── */
+function flatten(){
+  const out=[];
+  st.groups.forEach(g=> g.items.forEach(i=> out.push({...i, _g:g})));
+  st.flat = out;
+}
+function renderResults(){
+  flatten();
+  $('rc-total').textContent = st.flat.length;
+  $('rc-groups').textContent = st.groups.length;
+  $('rc-shown').textContent = Math.min(st.loaded, st.flat.length);
+  const box = $('groups'); box.innerHTML='';
+  if(!st.groups.length){
+    box.innerHTML = `<div class="empty"><span class="em">✨</span>没有发现重复项</div>`;
+    $('load-more').innerHTML=''; updateDock(); return;
+  }
+  st.loaded = 0; renderMore(st.pageSize);
+}
+function renderMore(n){
+  const box = $('groups');
+  const slice = st.groups.slice(st.loaded, st.loaded+n);
+  slice.forEach(g=> box.insertAdjacentHTML('beforeend', groupHtml(g)));
+  st.loaded += slice.length;
+  $('rc-shown').textContent = Math.min(st.loaded, st.flat.length);
+  const rest = st.groups.length - st.loaded;
+  $('load-more').innerHTML = rest>0
+    ? `<button class="btn btn-ghost" onclick="renderMore(${st.pageSize})">加载更多（剩余 ${rest} 组）</button>`
+    : (st.groups.length ? `<span style="color:var(--dim2);font-size:12px">已加载全部</span>` : '');
+  bindGroupEvents();
+  updateDock();
+}
+function groupHtml(g){
+  const keep = g.items.filter(i=>i.recommend_action==='keep').length;
+  const del = g.items.filter(i=>i.recommend_action==='delete').length;
+  const allSel = g.items.every(i=> st.selected.has(i.emby_id));
+  return `<div class="group" data-gk="${esc(g.group_key||g.title)}">
+    <div class="group-h" data-toggle>
+      <input class="cb" type="checkbox" ${allSel?'checked':''} data-gsel>
+      <span class="ttl">${esc(g.title)}</span>
+      <div class="meta">
+        ${keep?`<span class="tag keep">保留 ${keep}</span>`:''}
+        ${del?`<span class="tag del">删除 ${del}</span>`:''}
+        <span class="tag">${g.items.length} 项</span>
+      </div>
+    </div>
+    <div class="items">${g.items.map(i=>itemHtml(i,g)).join('')}</div>
+  </div>`;
+}
+function itemHtml(i,g){
+  const sel = st.selected.has(i.emby_id);
+  const thumb = i.has_poster
+    ? `<img class="thumb" loading="lazy" src="${esc(st.cfg.host||'')}/emby/Items/${esc(i.emby_id)}/Images/Primary?maxHeight=140" onerror="this.className='thumb ph';this.replaceWith(Object.assign(document.createElement('div'),{className:'thumb ph',textContent:'🎞'}))">`
+    : `<div class="thumb ph">🎞</div>`;
+  const tags = [i.tag_c?'<span class="badge c">C</span>':'', i.tag_uc?'<span class="badge uc">UC</span>':'',
+                i.tag_u?'<span class="badge u">U</span>':''].join(' ');
+  return `<div class="item ${sel?'sel':''}" data-id="${esc(i.emby_id)}">
+    <input class="cb" type="checkbox" ${sel?'checked':''} data-isel>
+    ${thumb}
+    <div class="body">
+      <div class="nm">${esc(i.name||i.emby_id)} ${tags}</div>
+      <div class="pth">${esc(i.display_path||i.path||'')}</div>
+      <div class="facts">
+        <span><b>${i.resolution||0}P</b></span><span><b>${bytes(i.size)}</b></span>
+        <span><b>${dur(i.duration)}</b></span>${i.tmdb_id?`<span>TMDB <b>${esc(i.tmdb_id)}</b></span>`:''}
+      </div>
+      ${i.recommend_reason?`<div class="why">${i.recommend_action==='keep'?'✅':'⚠️'} ${esc(i.recommend_reason)}</div>`:''}
+    </div>
+    ${i.recommend_action==='keep'?'<span class="tag keep">推荐保留</span>':(i.recommend_action==='delete'?'<span class="tag del">推荐删除</span>':'')}
+  </div>`;
+}
+function bindGroupEvents(){
+  document.querySelectorAll('.group').forEach(g=>{
+    const head = g.querySelector('[data-toggle]');
+    if(!head || head.dataset.bound) return;
+    head.dataset.bound='1';
+    head.addEventListener('click', e=>{
+      if(e.target.matches('input[type=checkbox]')) return;
+      g.classList.toggle('open');
+    });
+    g.querySelector('[data-gsel]').addEventListener('change', e=>{
+      const on = e.target.checked;
+      g.querySelectorAll('.item').forEach(it=>{
+        const id = it.dataset.id;
+        on ? st.selected.add(id) : st.selected.delete(id);
+        it.classList.toggle('sel', on);
+        const cb = it.querySelector('[data-isel]'); if(cb) cb.checked = on;
+      });
+      updateDock();
+    });
+    g.querySelectorAll('.item').forEach(it=>{
+      const cb = it.querySelector('[data-isel]');
+      it.addEventListener('click', e=>{
+        if(e.target.matches('input,button,a,img')) return;
+        cb.checked = !cb.checked;
+        cb.dispatchEvent(new Event('change'));
+      });
+      cb.addEventListener('change', ()=>{
+        const id = it.dataset.id;
+        cb.checked ? st.selected.add(id) : st.selected.delete(id);
+        it.classList.toggle('sel', cb.checked);
+        updateDock();
+      });
+    });
+  });
+}
+function updateDock(){
+  $('dock-n').textContent = st.selected.size;
+  const onResults = $('view-results').classList.contains('on');
+  $('dock').classList.toggle('on', onResults && st.selected.size>0);
+}
+
+/* ── 选择快捷 ── */
+$('btn-pick-all').onclick = ()=>{ document.querySelectorAll('.item').forEach(it=>{ st.selected.add(it.dataset.id);
+  it.classList.add('sel'); const cb=it.querySelector('[data-isel]'); if(cb) cb.checked=true; });
+  document.querySelectorAll('[data-gsel]').forEach(c=>c.checked=true); updateDock(); };
+$('btn-pick-none').onclick = ()=>{ st.selected.clear(); document.querySelectorAll('.item').forEach(it=>{ it.classList.remove('sel');
+  const cb=it.querySelector('[data-isel]'); if(cb) cb.checked=false; });
+  document.querySelectorAll('[data-gsel]').forEach(c=>c.checked=false); updateDock(); };
+$('btn-pick-rec').onclick = ()=>{ st.selected.clear();
+  document.querySelectorAll('.item').forEach(it=>{
+    const id = it.dataset.id; const f = st.flat.find(x=>x.emby_id===id);
+    const on = f && f.recommend_action==='delete';
+    if(on) st.selected.add(id);
+    it.classList.toggle('sel', on); const cb=it.querySelector('[data-isel]'); if(cb) cb.checked=on;
+  });
+  updateDock(); };
+
+/* ── 任务执行（删除/刷新） ── */
+const ops = new Map(); let opResults=[]; let opTimer=null;
+function opRender(){
+  const list = [...ops.values()];
+  if(!list.length){
+    $('progress').classList.remove('on');
+    if(opResults.length){ const s=opResults.slice(); opResults=[]; toast(s.join(' · ')); }
+    return;
+  }
+  $('progress').classList.add('on');
+  const total = list.reduce((a,t)=>a+t.total,0), done = list.reduce((a,t)=>a+Math.min(t.done,t.total),0);
+  const failed = list.reduce((a,t)=>a+t.failed,0), pct = total?Math.min(100,Math.round(done*100/total)):0;
+  $('p-text').textContent = [...new Set(list.map(t=>t.label))].join(' · ') + ` ${done}/${total}` + (failed?` · 失败 ${failed}`:'');
+  $('p-pct').textContent = pct+'%'; $('p-fill').style.width = pct+'%';
+}
+async function runOp(kind, ids, label){
+  const url = kind==='refresh' ? '/api/refresh' : '/api/delete';
+  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ids})});
+  const d = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(d.detail||d.message||('HTTP '+r.status));
+  if(d.status!=='started') throw new Error(d.message||'任务未启动');
+  const task = {label, total:d.total||ids.length, done:0, failed:0};
+  ops.set(d.job_id, task); opRender();
+  for(;;){
+    await new Promise(r=>setTimeout(r,600));
+    const s = await (await fetch('/api/ops/status?job_id='+encodeURIComponent(d.job_id))).json().catch(()=>({}));
+    if(s.status!=='ok'||!s.job){ ops.delete(d.job_id); opRender(); throw new Error(s.message||'任务状态丢失'); }
+    task.done = s.job.done; task.failed = (s.job.failed||[]).length; task.total = s.job.total||task.total;
+    opRender();
+    if(s.job.state!=='running'){
+      ops.delete(d.job_id);
+      const fail=(s.job.failed||[]).length;
+      let msg = kind==='refresh' ? `🔄 刷新 ${s.job.deleted} 个${fail?`，失败 ${fail} 个`:''}`
+                                : `🗑️ 删除 ${s.job.deleted} 个${fail?`，失败 ${fail} 个`:''}`;
+      if(s.job.state==='timeout'||s.job.state==='error') msg = '⚠️ '+(s.job.message||msg);
+      opResults.push(msg); opRender();
+      return s.job;
+    }
+  }
+}
+
+/* ── 批量动作 ── */
+function confirmBox(title, rows, onOk){
+  modal(`<h3>${esc(title)}</h3><div class="grid2">${rows.map(([k,v])=>`<div class="stat"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
+    <div class="foot"><button class="btn btn-ghost" onclick="closeModal()">取消</button>
+    <button class="btn btn-main" id="mk-ok">确认执行</button></div>`);
+  $('mk-ok').onclick = ()=>{ closeModal(); onOk(); };
+}
+function selectedFacts(){
+  const items = st.flat.filter(i=>st.selected.has(i.emby_id));
+  const size = items.reduce((a,b)=>a+(Number(b.size)||0),0);
+  const groups = new Set(items.map(i=>i._g && (i._g.group_key||i._g.title))).size;
+  const rec = items.filter(i=>i.recommend_action==='delete').length;
+  return {items, size, groups, rec};
+}
+function removeFromState(ids){
+  const set = new Set(ids);
+  st.groups = st.groups.map(g=>({...g, items:g.items.filter(i=>!set.has(i.emby_id))}))
+    .filter(g=>['av','smart','size','duration'].includes(st.mode) ? g.items.length>1 : g.items.length>0);
+  st.selected.clear(); renderResults(); updateDock();
+}
+$('dock-del').onclick = ()=>{
+  const f = selectedFacts(); if(!f.items.length) return;
+  const run = async ()=>{
+    const ids = f.items.map(i=>i.emby_id);
+    removeFromState(ids);   // 乐观更新
+    try{ await runOp('delete', ids, '🗑️ 删除中'); }catch(e){ toast('❌ 删除失败：'+(e.message||e)); }
+    pollStatus();
+  };
+  if(st.cfg.prefs && st.cfg.prefs.confirm_batch==='false') run();
+  else confirmBox('批量删除', [['操作','删除'],['条目',f.items.length],['涉及分组',f.groups],['预计释放',bytes(f.size)]], run);
+};
+$('dock-refresh').onclick = ()=>{
+  const f = selectedFacts(); if(!f.items.length) return;
+  const run = async ()=>{ try{ await runOp('refresh', f.items.map(i=>i.emby_id), '🔄 刷新中'); }catch(e){ toast('❌ 刷新失败：'+(e.message||e)); } };
+  if(st.cfg.prefs && st.cfg.prefs.confirm_batch==='false') run();
+  else confirmBox('批量刷新', [['操作','重新刮削'],['条目',f.items.length],['模式', st.cfg.prefs?.refresh_full==='true'?'全量重刮':'按需刷新']], run);
+};
+$('dock-ignore').onclick = async ()=>{
+  const f = selectedFacts(); if(!f.items.length) return;
+  try{
+    if(st.mode==='duration'){
+      const keys = [...new Set(f.items.map(i=>i._g.group_key).filter(Boolean))];
+      await fetch('/api/ignore', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({group_keys:keys, mode:st.mode})});
+    } else {
+      await fetch('/api/ignore', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ids:f.items.map(i=>i.emby_id), mode:st.mode})});
+    }
+    removeFromState(f.items.map(i=>i.emby_id));
+    toast('✅ 已加入忽略');
+  }catch(e){ toast('❌ 忽略失败：'+(e.message||e)); }
+};
+
+/* ── 配置 ── */
+async function loadConfig(){
+  try{
+    const c = await (await fetch('/api/config')).json();
+    st.cfg = c;
+    $('c-host').value = c.host||''; $('c-user').value = c.user||''; $('c-webhook').value = c.webhook||'';
+    $('c-cron').value = c.cron_sync||'';
+    const p = c.prefs||{};
+    $('p-av').value = p.av_keep_priority||'tag_uc'; $('p-size').value = p.size_keep||'path_long';
+    $('p-dur').value = p.duration_keep||'min'; $('p-tmdb').value = p.smart_keep||'reso_max';
+    $('p-scope').value = p.duration_scope||'dir'; $('p-prec').value = p.duration_precision||'second';
+    $('p-confirm').checked = (p.confirm_batch||'true')==='true';
+    $('p-full').checked = (p.refresh_full||'false')==='true';
+    st.durationScope = p.duration_scope||'dir'; st.durationPrecision = p.duration_precision||'second';
+    document.querySelectorAll('#ui-seg button').forEach(b=> b.classList.toggle('on', b.dataset.ui===(c.ui?.layout||'classic')));
+  }catch(e){}
+}
+function prefsPayload(){
+  return {
+    av_keep_priority:$('p-av').value, size_keep:$('p-size').value, duration_keep:$('p-dur').value,
+    duration_scope:$('p-scope').value, duration_precision:$('p-prec').value, smart_keep:$('p-tmdb').value,
+    confirm_batch:$('p-confirm').checked?'true':'false', refresh_full:$('p-full').checked?'true':'false',
+  };
+}
+$('btn-save-conn').onclick = async ()=>{
+  try{
+    const body = {host:$('c-host').value.trim(), user:$('c-user').value.trim(), pwd:$('c-pwd').value,
+      webhook:$('c-webhook').value.trim(), cron_sync:$('c-cron').value.trim(), prefs:prefsPayload()};
+    const r = await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const d = await r.json();
+    if(d.ok===false) throw new Error(d.message||'保存失败');
+    $('c-pwd').value=''; toast('✅ 连接配置已保存'); pollStatus();
+  }catch(e){ toast('❌ 保存失败：'+(e.message||e)); }
+};
+$('btn-save-prefs').onclick = async ()=>{
+  try{
+    const c = st.cfg;
+    const body = {host:c.host||'', user:c.user||'', webhook:c.webhook||'', cron_sync:c.cron_sync||'', prefs:prefsPayload()};
+    const r = await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const d = await r.json(); if(d.ok===false) throw new Error(d.message||'保存失败');
+    toast('✅ 偏好已保存'); loadConfig();
+  }catch(e){ toast('❌ 保存失败：'+(e.message||e)); }
+};
+$('btn-test-hook').onclick = async ()=>{
+  try{ const r = await fetch('/api/test_webhook', {method:'POST'}); if(!r.ok) throw new Error('HTTP '+r.status); toast('🔔 测试通知已发送'); }
+  catch(e){ toast('❌ 测试失败：'+(e.message||e)); }
+};
+document.querySelectorAll('#ui-seg button').forEach(b=> b.onclick = async ()=>{
+  if(b.classList.contains('on')) return;
+  await fetch('/api/ui', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({layout:b.dataset.ui})});
+  location.reload();
+});
+$('btn-classic').onclick = async ()=>{
+  await fetch('/api/ui', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({layout:'classic'})});
+  location.href='/';
+};
+$('btn-sync').onclick = async ()=>{
+  try{ await fetch('/api/sync', {method:'POST'}); toast('🔄 同步已开始，稍后自动刷新状态'); setTimeout(pollStatus, 4000); }
+  catch(e){ toast('❌ 同步失败'); }
+};
+
+/* ── 忽略名单 ── */
+async function loadIgnored(){
+  try{
+    const rows = await (await fetch('/api/ignore?limit=500')).json();
+    const kw = ($('ign-search').value||'').toLowerCase(), mf = $('ign-mode').value;
+    const list = rows.filter(r=> (!mf || r.mode===mf) && (!kw || `${r.name||''} ${r.emby_id||''}`.toLowerCase().includes(kw)));
+    const MODE_CN = {av:'番号',smart:'TMDB',size:'同大',duration:'时长',noposter:'封面',tiny:'极小',global:'全局'};
+    $('ign-list').innerHTML = list.length ? list.map(r=>`
+      <div class="item" style="border-top:0;padding:9px 0">
+        <div class="body"><div class="nm">${esc(r.name||r.emby_id)}</div>
+          <div class="facts"><span class="tag">${esc(MODE_CN[r.mode]||r.mode)}</span><span>${esc(r.emby_id)}</span></div></div>
+        <button class="btn btn-ghost btn-sm" onclick="unignore(${r.id})">恢复</button>
+      </div>`).join('') : `<div style="color:var(--dim2);font-size:12px;padding:12px 0">暂无记录</div>`;
+  }catch(e){}
+}
+async function unignore(id){ await fetch('/api/ignore/'+id, {method:'DELETE'}); loadIgnored(); }
+$('ign-search').oninput = loadIgnored; $('ign-mode').onchange = loadIgnored;
+
+/* ── 计划任务 ── */
+async function loadTasks(){
+  try{
+    st.tasks = await (await fetch('/api/tasks')).json();
+    const MODE_CN = {av:'番号',smart:'TMDB',size:'同大',duration:'时长',noposter:'封面',tiny:'极小'};
+    $('task-list').innerHTML = st.tasks.length ? st.tasks.map(t=>`
+      <div class="task">
+        <div class="t-main">
+          <div class="t-name">${esc(t.name)} <span class="tag">${esc(MODE_CN[t.mode]||t.mode)}</span></div>
+          <div class="t-sub"><span>cron <b style="font-family:monospace">${esc(t.cron)}</b></span>
+            <span>上次 ${t.last_status||'idle'} · ${t.last_found||0} 项</span>
+            ${t.last_message?`<span>${esc(t.last_message)}</span>`:''}</div>
+        </div>
+        <div class="t-actions">
+          <button class="btn btn-ghost btn-sm" onclick="runTask(${t.id})">立即执行</button>
+          <button class="btn btn-ghost btn-sm" onclick="editTask(${t.id})">编辑</button>
+          <button class="btn btn-danger btn-sm" onclick="delTask(${t.id})">删除</button>
+        </div>
+      </div>`).join('') : `<div class="empty"><span class="em">🗓️</span>还没有定时计划</div>`;
+  }catch(e){}
+}
+function taskForm(t){
+  t = t||{name:'',mode:'smart',cron:'0 4 * * *',libraries:'',enabled:true};
+  const MODE_CN = {av:'番号',smart:'TMDB',size:'同大',duration:'时长',noposter:'封面',tiny:'极小'};
+  modal(`<h3>${t.id?'编辑计划':'新建计划'}</h3>
+    <div class="field" style="margin-bottom:10px"><label>名称</label><input id="t-name" value="${esc(t.name)}"></div>
+    <div class="row">
+      <div class="field"><label>模式</label><select id="t-mode">${Object.entries(MODE_CN).map(([k,v])=>`<option value="${k}" ${t.mode===k?'selected':''}>${v}</option>`).join('')}</select></div>
+      <div class="field"><label>Cron（5 段）</label><input id="t-cron" value="${esc(t.cron)}"></div>
+    </div>
+    <div class="field" style="margin-top:10px"><label>媒体库 ID（逗号分隔，留空=全部）</label><input id="t-libs" value="${esc(t.libraries||'')}"></div>
+    <div class="foot"><button class="btn btn-ghost" onclick="closeModal()">取消</button>
+      <button class="btn btn-main" id="t-save">保存</button></div>`);
+  $('t-save').onclick = async ()=>{
+    const body = {name:$('t-name').value.trim(), mode:$('t-mode').value, cron:$('t-cron').value.trim(),
+      libraries:$('t-libs').value.trim(), enabled:true};
+    const url = t.id ? '/api/tasks/'+t.id : '/api/tasks';
+    const r = await fetch(url, {method: t.id?'PUT':'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const d = await r.json().catch(()=>({}));
+    if(d.ok===false){ toast('❌ '+(d.message||'保存失败')); return; }
+    closeModal(); loadTasks(); toast('✅ 已保存');
+  };
+}
+$('btn-task-new').onclick = ()=> taskForm(null);
+function editTask(id){ taskForm(st.tasks.find(t=>t.id===id)); }
+async function delTask(id){ if(!confirm('删除该计划？')) return; await fetch('/api/tasks/'+id, {method:'DELETE'}); loadTasks(); }
+async function runTask(id){
+  toast('⏳ 执行中…');
+  const d = await (await fetch(`/api/tasks/${id}/run`, {method:'POST'})).json();
+  toast(d.status==='ok' ? `✅ 完成：${d.last_message||('命中 '+(d.found||0))}` : `❌ ${d.message||'执行失败'}`);
+  loadTasks();
+}
+
+/* ── 日志抽屉 ── */
+function openDrawer(){ st.drawerOpen=true; $('drawer').classList.add('on'); pullLogs(); }
+function closeDrawer(){ st.drawerOpen=false; $('drawer').classList.remove('on'); }
+$('btn-logs').onclick = openDrawer; $('btn-log-close').onclick = closeDrawer;
+$('btn-log-clear').onclick = async ()=>{ await fetch('/api/logs/clear', {method:'POST'}); st.logSeq=0; $('log-body').innerHTML=''; };
+async function pullLogs(){
+  if(!st.drawerOpen) return;
+  try{
+    const r = await (await fetch('/api/logs?since='+st.logSeq)).json();
+    const lines = Array.isArray(r) ? r : (r.lines||[]);
+    const html = lines.map(l=>`<div>${esc(l)}</div>`).join('');
+    if(Array.isArray(r)){ $('log-body').innerHTML = html; st.logSeq = r.length; }
+    else { $('log-body').insertAdjacentHTML('beforeend', html); st.logSeq = r.total; }
+    $('log-body').scrollTop = $('log-body').scrollHeight;
+  }catch(e){}
+}
+
+/* ── 启动 ── */
+(async function boot(){
+  renderModes(); renderOptions(); nav('clean');
+  await loadConfig(); await loadLibs(); pollStatus();
+  setInterval(pollStatus, 10000);
+  setInterval(()=>{ if(st.drawerOpen) pullLogs(); }, 5000);
+})();
+</script>
+</body>
+</html>

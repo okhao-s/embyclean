@@ -26,3 +26,6 @@ class ConfigRequest(BaseModel):
     webhook: Optional[str] = ""
     cron_sync: Optional[str] = ""
     prefs: Optional[Dict[str, Any]] = None
+
+class UiRequest(BaseModel):
+    layout: str

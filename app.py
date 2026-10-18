@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from core.db import init_db, SessionLocal, Config, IgnoredItem, AuditTask, MediaItem, get_conf, set_conf
-from core.schemas import DeleteRequest, IgnoreRequest, RefreshRequest, TaskReq, ConfigRequest
+from core.schemas import DeleteRequest, IgnoreRequest, RefreshRequest, TaskReq, ConfigRequest, UiRequest
 from core.responses import ok, err
 import services.scanner as scanner_service
 from services.scanner import MODE_MAP
@@ -688,7 +688,8 @@ def cfg_get():
             "smart_keep": get_conf(db, "pref.smart.keep") or "reso_max",
             "confirm_batch": get_conf(db, "pref.batch.confirm") or "true",
             "refresh_full": get_conf(db, "pref.refresh.full") or "false",
-        }
+        },
+        "ui": {"layout": get_conf(db, "ui.layout") or "classic"},
     }
     db.close(); return r
 
@@ -1020,8 +1021,35 @@ def logs_c():
     log_buffer.clear(); log_base = 0
     return ok(status="ok")
 
+UI_LAYOUTS = {"classic": "index.html", "studio": "index_v2.html"}
+
+
+def current_ui_layout() -> str:
+    db = SessionLocal()
+    try:
+        layout = str(get_conf(db, "ui.layout") or "classic").strip().lower()
+    finally:
+        db.close()
+    return layout if layout in UI_LAYOUTS else "classic"
+
+
 @app.get("/", response_class=HTMLResponse)
-async def idx_p(r: Request): return templates.TemplateResponse("index.html", {"request": r})
+async def idx_p(r: Request):
+    return templates.TemplateResponse(UI_LAYOUTS[current_ui_layout()], {"request": r})
+
+
+@app.post("/api/ui")
+def ui_switch(req: UiRequest):
+    layout = str(req.layout or "").strip().lower()
+    if layout not in UI_LAYOUTS:
+        return err(status="error", message=f"未知界面：{layout}")
+    db = SessionLocal()
+    try:
+        set_conf(db, "ui.layout", layout)
+    finally:
+        db.close()
+    sys_log(f"[UI] 界面切换为 {layout}")
+    return ok(status="ok", layout=layout)
 @app.get("/api/libraries")
 async def libs_g():
     db = SessionLocal(); h, t = get_conf(db, "host"), await get_token(db)
