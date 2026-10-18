@@ -213,21 +213,6 @@
 
 ---
 
-## 界面布局（两套可自由切换）
-
-面板内置两套布局，**功能完全一致**，随时切换：
-
-- **经典布局**（`index.html`）：左侧 280px 侧栏 + 4 套配色主题，信息密度高
-- **Studio 布局**（`index_v2.html`）：图标导航栏 + 模式卡片 + 卡片式结果列表 + 底部操作坞 + 日志抽屉
-
-切换方式：设置页 →「界面布局」/「界面风格」，或直接调接口：
-
-```bash
-curl -X POST http://<host>:19898/api/ui -H 'Content-Type: application/json' -d '{"layout":"studio"}'
-```
-
-选择存在配置表 `ui.layout`（`classic` / `studio`），刷新即生效，互不影响数据与功能。
-
 ## 部署
 
 ### Docker Compose
