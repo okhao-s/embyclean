@@ -165,6 +165,7 @@
 - `DELETE_TIMEOUT`（默认 180）：删除整体超时，超时返回 504
 - `EMBY_TIMEOUT`（默认 60）：Emby 请求读超时（连接超时固定 5s）
 - `PRUNE_MIN_INTERVAL`（默认 300）：扫描时反查远端存在性的最小间隔，避免频繁打 Emby
+- `PRUNE_ENABLED`（默认 true）：设为 `0/false` 可完全关闭扫描时的远端反查（不会清理本地孤儿缓存，但扫描不再打 Emby）
 - `STATUS_PROBE_TTL`（默认 15）：`/api/status` 远端探测缓存，前端 5s 轮询不会每次都登录 Emby
 
 `pref.refresh.full`（设置页「重新刮削走全量模式」）：默认 `false`，即 `Recursive=false + Default + 不替换图片/元数据`。
