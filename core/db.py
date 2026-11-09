@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, BigInteger, Float, inspect, text
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, BigInteger, Float, inspect, text, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 DATA_DIR = os.environ.get("EMBYCLEAN_DATA_DIR", "/app/data")
@@ -59,6 +59,13 @@ class MediaItem(Base):
 
 engine = create_engine(DB_PATH, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+@event.listens_for(engine, "connect")
+def _set_sqlite_busy_timeout(dbapi_conn, _record):
+    # SQLite 默认 busy_timeout=0：同步/删除/调度并发写库一撞就抛 database is locked。
+    # 给每个连接设 5s 等待，避免高并发下偶发锁库直接崩掉请求。
+    dbapi_conn.execute("PRAGMA busy_timeout=5000")
 
 def init_db():
     Base.metadata.create_all(bind=engine)

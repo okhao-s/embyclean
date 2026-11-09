@@ -1,6 +1,7 @@
 import os, re, logging, asyncio, httpx, time, collections, uuid
 from datetime import datetime, timezone
 from typing import List, Optional
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.gzip import GZipMiddleware
@@ -341,11 +342,34 @@ async def get_token(db, force=False):
         log_status_once("auth_exception", f"[AUTH] ❌ Emby 登录异常: {e}")
     return ""
 
+
+async def _emby_request_authed(db, method: str, url: str, **kwargs):
+    """带 401 自愈的 Emby 请求：token 失效时强制重新登录换新 token 并重试一次。
+
+    重试只做一次（不递归），避免 token 反复失效时死循环把 Emby 打崩。
+    返回 None 表示当前没有可用 token（host/user 未配置或登录失败）。
+    """
+    token = await get_token(db)
+    if not token:
+        return None
+    headers = dict(kwargs.pop("headers", None) or {})
+    headers.update(emby_headers(token))
+    resp = await emby_client(db).request(method, url, headers=headers, **kwargs)
+    if resp.status_code == 401:
+        sys_log("[AUTH] ⚠️ Emby 返回 401，token 可能失效，尝试重新登录重试")
+        fresh = await get_token(db, force=True)
+        if fresh and fresh != token:
+            headers.update(emby_headers(fresh))
+            resp = await emby_client(db).request(method, url, headers=headers, **kwargs)
+    return resp
+
+
 async def _scheduled_sync():
     try:
         await do_sync("计划")
     except Exception as e:
         sys_log(f"[SCHED] ❌ 计划同步异常: {e}")
+        logger.exception("[SCHED] 计划同步异常详情")
 
 async def send_webhook_standalone(command, detail, raw=False):
     db = SessionLocal()
@@ -377,7 +401,10 @@ async def do_sync(trigger="手动"):
             if not h or not t:
                 sys_log("[SYNC] ❌ Emby 未配置或授权失败")
                 return False
-            res = await emby_client(db).get(f"{h.rstrip('/')}/Library/MediaFolders", headers=emby_headers(t))
+            res = await _emby_request_authed(db, "GET", f"{h.rstrip('/')}/Library/MediaFolders")
+            if res is None:
+                sys_log("[SYNC] ❌ 获取媒体库失败：无可用 token")
+                return False
             if res.status_code != 200:
                 sys_log(f"[SYNC] ❌ 获取媒体库失败: HTTP {res.status_code}")
                 return False
@@ -385,19 +412,24 @@ async def do_sync(trigger="手动"):
             # 不再先 DELETE：新一次同步写新的 sync_gen，全部灌完再清旧代。
             # 否则同步窗口内扫描恒空，中途失败整个缓存就没了。
             sync_gen = int(time.time())
-            tot = 0; seen_ids = set()
+            tot = 0; seen_ids = set(); sync_failed = False
             for l in libs:
+                if sync_failed:
+                    break
                 lib_id = l['Id']; lib_name = l.get('Name', 'Unknown'); current_sync_lib = lib_name; start_index = 0
                 while True:
                     params = {"ParentId": lib_id, "Recursive": "true", "IncludeItemTypes": "Movie,Video,Series", "Fields": "Path,MediaSources,ImageTags,DateCreated,ProviderIds", "StartIndex": start_index, "Limit": 1000}
                     try:
-                        res_items = await emby_client(db).get(f"{h.rstrip('/')}/emby/Items", params=params, headers=emby_headers(t))
-                        if res_items.status_code != 200:
-                            sys_log(f"[SYNC] ❌ 拉取媒体项失败 [{lib_name}] start={start_index}: HTTP {res_items.status_code}")
+                        res_items = await _emby_request_authed(db, "GET", f"{h.rstrip('/')}/emby/Items", params=params)
+                        if res_items is None or res_items.status_code != 200:
+                            status = res_items.status_code if res_items is not None else "no-token"
+                            sys_log(f"[SYNC] ❌ 拉取媒体项失败 [{lib_name}] start={start_index}: HTTP {status}")
+                            sync_failed = True
                             break
                         data = res_items.json(); items = data.get("Items", []); total_count = data.get("TotalRecordCount", 0)
                     except Exception as e:
                         sys_log(f"[SYNC] ❌ 拉取媒体项失败 [{lib_name}] start={start_index}: {e}")
+                        sync_failed = True
                         break
                     if not items:
                         break
@@ -443,6 +475,10 @@ async def do_sync(trigger="手动"):
                     start_index += len(items)
                     if start_index >= total_count:
                         break
+            if sync_failed:
+                # 中途失败：保留上一代缓存，扫描不受影响，等下次同步完整成功再换代
+                sys_log("[SYNC] ❌ 同步中途失败，保留上一代缓存不清理")
+                return False
             # 收尾：删掉上一代残留（含旧版本没有 sync_gen 的 NULL 行）
             stale = db.query(MediaItem).filter(
                 or_(MediaItem.sync_gen != sync_gen, MediaItem.sync_gen.is_(None))
@@ -454,6 +490,7 @@ async def do_sync(trigger="手动"):
             return True
         except Exception as e:
             sys_log(f"[SYNC] ❌ 异常: {e}")
+            logger.exception("[SYNC] 同步异常详情")
             return False
         finally:
             db.close(); current_sync_lib = ""
@@ -565,8 +602,10 @@ async def scheduler_loop():
                     t.last_duration_ms = 0
                     db.commit()
                     sys_log(f"[SCHED] ❌ 任务执行失败 [{t.id}:{t.name}]: {e}")
+                    logger.exception(f"[SCHED] 任务执行异常详情 [{t.id}:{t.name}]")
         except Exception as e:
             sys_log(f"[SCHED] ❌ 调度异常: {e}")
+            logger.exception("[SCHED] 调度循环异常详情")
         finally:
             db.close()
 
@@ -596,39 +635,72 @@ def health_api():
 @app.get("/api/status")
 async def st_api():
     db = SessionLocal()
-    sn, sv, sid, con = "离线", "", "", False
-    h = get_conf(db, "host")
-    # 前端每 5s 轮询一次，每个标签页都要打一次 Emby 登录 + System/Info。
-    # 远端探测结果缓存一小段时间，多标签页/多客户端时不再把 Emby 打满。
-    probe_key = f"{h}|{get_conf(db, 'user')}|{ssl_verify_enabled(db)}"
-    now_mono = time.monotonic()
-    cached = _status_probe_cache
-    cache_valid = bool(h and cached["data"] and cached["key"] == probe_key
-                       and now_mono - cached["at"] < STATUS_PROBE_TTL)
-    if cache_valid:
-        sn, sv, sid, con = cached["data"]
-    else:
-        t = ""
-        if h:
-            try:
-                t = await asyncio.wait_for(get_token(db), timeout=6.0)
-            except Exception as e:
-                log_status_once("status_token_timeout", f"[STATUS] ⚠️ 获取 token 超时/失败: {e}")
-                t = ""
-        if h and t:
-            try:
-                r = await emby_client(db).get(f"{h.rstrip('/')}/System/Info", headers=emby_headers(t), timeout=5.0)
-                if r.status_code == 200:
-                    info = r.json(); sid = info.get("Id") or info.get("id") or info.get("ServerId") or ""
-                    sn, sv, con = info.get("ServerName"), info.get("Version"), True
-                elif r.status_code in [401, 403]:
-                    await get_token(db, force=True)
-            except Exception as e:
-                log_status_once("status_info_error", f"[STATUS] ⚠️ 获取服务状态失败: {e}")
-        if h:
-            _status_probe_cache.update({"key": probe_key, "at": now_mono, "data": (sn, sv, sid, con)})
-    res = {"local_cache": db.query(MediaItem).count(), "cleaned_count": get_conf(db, "cleaned_count") or "0", "saved_space": get_conf(db, "saved_space") or "0", "is_syncing": sync_lock.locked(), "sync_lib": current_sync_lib, "connected": con, "server_name": sn, "server_id": sid, "server_ver": sv, "user_name": get_conf(db, "user"), "sync_cron": get_conf(db, "cron_sync"), "last_log": log_buffer[-1] if log_buffer else "就绪", "status_checked_at": int(time.time()), "emby_rpm": emby_rpm(), "emby_requests": EMBY_STATS["total"], "emby_errors": EMBY_STATS["errors"]}
-    db.close(); return res
+    try:
+        sn, sv, sid, con = "离线", "", "", False
+        h = get_conf(db, "host")
+        # 前端每 5s 轮询一次，每个标签页都要打一次 Emby 登录 + System/Info。
+        # 远端探测结果缓存一小段时间，多标签页/多客户端时不再把 Emby 打满。
+        probe_key = f"{h}|{get_conf(db, 'user')}|{ssl_verify_enabled(db)}"
+        now_mono = time.monotonic()
+        cached = _status_probe_cache
+        cache_valid = bool(h and cached["data"] and cached["key"] == probe_key
+                           and now_mono - cached["at"] < STATUS_PROBE_TTL)
+        if cache_valid:
+            sn, sv, sid, con = cached["data"]
+        else:
+            t = ""
+            if h:
+                try:
+                    t = await asyncio.wait_for(get_token(db), timeout=6.0)
+                except Exception as e:
+                    log_status_once("status_token_timeout", f"[STATUS] ⚠️ 获取 token 超时/失败: {e}")
+                    t = ""
+            if h and t:
+                try:
+                    r = await emby_client(db).get(f"{h.rstrip('/')}/System/Info", headers=emby_headers(t), timeout=5.0)
+                    if r.status_code == 200:
+                        info = r.json(); sid = info.get("Id") or info.get("id") or info.get("ServerId") or ""
+                        sn, sv, con = info.get("ServerName"), info.get("Version"), True
+                    elif r.status_code in [401, 403]:
+                        await get_token(db, force=True)
+                except Exception as e:
+                    log_status_once("status_info_error", f"[STATUS] ⚠️ 获取服务状态失败: {e}")
+            if h:
+                _status_probe_cache.update({"key": probe_key, "at": now_mono, "data": (sn, sv, sid, con)})
+        res = {"local_cache": db.query(MediaItem).count(), "cleaned_count": get_conf(db, "cleaned_count") or "0", "saved_space": get_conf(db, "saved_space") or "0", "is_syncing": sync_lock.locked(), "sync_lib": current_sync_lib, "connected": con, "server_name": sn, "server_id": sid, "server_ver": sv, "user_name": get_conf(db, "user"), "sync_cron": get_conf(db, "cron_sync"), "last_log": log_buffer[-1] if log_buffer else "就绪", "status_checked_at": int(time.time()), "emby_rpm": emby_rpm(), "emby_requests": EMBY_STATS["total"], "emby_errors": EMBY_STATS["errors"]}
+        return res
+    finally:
+        db.close()
+
+WEBHOOK_MASK = "******"  # webhook 脱敏占位符
+
+
+def mask_webhook_url(url: str) -> str:
+    """脱敏 webhook：保留协议 + host + 路径，query 的 value 全部打码，userinfo 里的密码也打码。
+
+    返回的串仍可被前端回传（用于设置页编辑不回写真实值），POST 时靠 WEBHOOK_MASK 识别。
+    """
+    if not url:
+        return ""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    scheme, netloc, path, query, fragment = parts
+    if "@" in netloc:
+        userinfo, hostport = netloc.rsplit("@", 1)
+        if ":" in userinfo:
+            user, _ = userinfo.split(":", 1)
+            netloc = f"{user}:{WEBHOOK_MASK}@{hostport}"
+    if query:
+        pairs = parse_qsl(query, keep_blank_values=True)
+        query = urlencode([(k, WEBHOOK_MASK) for k, _ in pairs], safe="*")
+    return urlunsplit((scheme, netloc, path, query, fragment))
+
+
+def _is_masked_webhook(value: str) -> bool:
+    return WEBHOOK_MASK in (value or "")
+
 
 @app.post("/api/config")
 def cfg_post(c: ConfigRequest):
@@ -647,7 +719,9 @@ def cfg_post(c: ConfigRequest):
         set_conf(db, "user", user)
         if c.pwd:
             set_conf(db, "pwd", c.pwd)
-        set_conf(db, "webhook_url", webhook)
+        # 前端把 GET 脱敏后的 webhook 原样回传时，识别脱敏标记，保持库里真实值不变
+        if not _is_masked_webhook(webhook):
+            set_conf(db, "webhook_url", webhook)
         set_conf(db, "cron_sync", cron_sync)
         if old_host != host or old_user != user or (c.pwd and old_pwd != c.pwd):
             invalidate_runtime_state(reset_sync_progress=False)
@@ -674,26 +748,34 @@ def cfg_post(c: ConfigRequest):
 @app.get("/api/config")
 def cfg_get():
     db = SessionLocal()
-    r = {
-        "host": get_conf(db, "host"),
-        "user": get_conf(db, "user"),
-        "webhook": get_conf(db, "webhook_url"),
-        "cron_sync": get_conf(db, "cron_sync"),
-        "prefs": {
-            "av_keep_priority": get_conf(db, "pref.av.keep_priority") or "tag_uc",
-            "size_keep": get_conf(db, "pref.size.keep") or "path_long",
-            "duration_keep": get_conf(db, "pref.duration.keep") or "min",
-            "duration_scope": get_conf(db, "pref.duration.scope") or "dir",
-            "duration_precision": get_conf(db, "pref.duration.precision") or "second",
-            "smart_keep": get_conf(db, "pref.smart.keep") or "reso_max",
-            "confirm_batch": get_conf(db, "pref.batch.confirm") or "true",
-            "refresh_full": get_conf(db, "pref.refresh.full") or "false",
+    try:
+        r = {
+            "host": get_conf(db, "host"),
+            "user": get_conf(db, "user"),
+            "webhook": mask_webhook_url(get_conf(db, "webhook_url")),
+            "cron_sync": get_conf(db, "cron_sync"),
+            "prefs": {
+                "av_keep_priority": get_conf(db, "pref.av.keep_priority") or "tag_uc",
+                "size_keep": get_conf(db, "pref.size.keep") or "path_long",
+                "duration_keep": get_conf(db, "pref.duration.keep") or "min",
+                "duration_scope": get_conf(db, "pref.duration.scope") or "dir",
+                "duration_precision": get_conf(db, "pref.duration.precision") or "second",
+                "smart_keep": get_conf(db, "pref.smart.keep") or "reso_max",
+                "confirm_batch": get_conf(db, "pref.batch.confirm") or "true",
+                "refresh_full": get_conf(db, "pref.refresh.full") or "false",
+            }
         }
-    }
-    db.close(); return r
+        return r
+    finally:
+        db.close()
 
 @app.get("/api/tasks")
-def tasks_get(): db = SessionLocal(); r = db.query(AuditTask).order_by(AuditTask.id.asc()).all(); db.close(); return r
+def tasks_get():
+    db = SessionLocal()
+    try:
+        return db.query(AuditTask).order_by(AuditTask.id.asc()).all()
+    finally:
+        db.close()
 @app.post("/api/tasks")
 def task_post(t: TaskReq):
     db = SessionLocal()
@@ -720,7 +802,13 @@ def task_put(tid: int, t: TaskReq):
         db.close()
 @app.delete("/api/tasks/{id}")
 def task_del(id: int):
-    db = SessionLocal(); db.query(AuditTask).filter(AuditTask.id == id).delete(); db.commit(); db.close(); return {"status": "ok"}
+    db = SessionLocal()
+    try:
+        db.query(AuditTask).filter(AuditTask.id == id).delete()
+        db.commit()
+        return {"status": "ok"}
+    finally:
+        db.close()
 
 @app.post("/api/tasks/{id}/run")
 async def task_run_now(id: int):
@@ -745,6 +833,14 @@ async def task_run_now(id: int):
 
 @app.get("/api/scan")
 async def scan_api(mode: str, lib: str = "", param_s: str = "100", param_d: str = "0", duration_scope: str = "dir", duration_precision: str = "second"):
+    if mode == "tiny":
+        # tiny 模式会 float(param_s)/float(param_d)，非法输入会直接 500；
+        # 这里提前校验，返回 400 让前端提示而不是打爆日志。
+        try:
+            float(param_s)
+            float(param_d)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="tiny 模式的 param_s/param_d 必须是数字")
     findings = await perform_scan_async(mode, lib, param_s, param_d, duration_scope, duration_precision)
     return serialize_findings(findings)
 
@@ -752,18 +848,19 @@ async def scan_api(mode: str, lib: str = "", param_s: str = "100", param_d: str 
 @app.get("/api/ignore")
 def ignore_get(limit: int = 500, offset: int = 0):
     db = SessionLocal()
-    q = db.query(IgnoredItem).order_by(IgnoredItem.id.desc())
-    items = q.offset(max(offset, 0)).limit(min(max(limit, 1), 1000)).all()
-    res = [{
-        "id": i.id,
-        "emby_id": i.emby_id,
-        "name": i.name if i.name else i.emby_id,
-        "mode": i.mode,
-        "scope_type": i.scope_type,
-        "scope_key": i.scope_key,
-    } for i in items]
-    db.close()
-    return res
+    try:
+        q = db.query(IgnoredItem).order_by(IgnoredItem.id.desc())
+        items = q.offset(max(offset, 0)).limit(min(max(limit, 1), 1000)).all()
+        return [{
+            "id": i.id,
+            "emby_id": i.emby_id,
+            "name": i.name if i.name else i.emby_id,
+            "mode": i.mode,
+            "scope_type": i.scope_type,
+            "scope_key": i.scope_key,
+        } for i in items]
+    finally:
+        db.close()
 
 # 🚀 修改：duration 支持按分组忽略，其它模式保持按 item
 @app.post("/api/ignore")
@@ -812,14 +909,17 @@ async def ignore_post(r: IgnoreRequest):
 @app.delete("/api/ignore/{row_id}")
 def ignore_del(row_id: int):
     db = SessionLocal()
-    item = db.query(IgnoredItem).filter(IgnoredItem.id == row_id).first()
-    if item:
-        name = item.name
-        mode = item.mode
-        db.delete(item)
-        db.commit()
-        sys_log(f"[IGNORE] ♻️ 恢复白名单 [{mode}]: {name}") 
-    db.close(); return ok(status="ok")
+    try:
+        item = db.query(IgnoredItem).filter(IgnoredItem.id == row_id).first()
+        if item:
+            name = item.name
+            mode = item.mode
+            db.delete(item)
+            db.commit()
+            sys_log(f"[IGNORE] ♻️ 恢复白名单 [{mode}]: {name}") 
+        return ok(status="ok")
+    finally:
+        db.close()
 
 async def _delete_one(client, base, eid, token, sem=None):
     """删单条，返回 (emby_id, None) 表示成功，(emby_id, 原因) 表示失败。5xx/网络抖动重试一次。"""
@@ -940,20 +1040,30 @@ async def background_silent_delete(ids, host, token):
 
 
 def _gc_delete_jobs():
-    """清掉过期/超量的任务记录，防止内存无限增长。"""
+    """清掉过期/超量的任务记录，防止内存无限增长。
+
+    只淘汰已结束（非 running）的任务：running 任务被弹掉的话前端轮询就查不到进度了。
+    """
     now = time.time()
     for jid, job in list(DELETE_JOBS.items()):
         if job["state"] != "running" and now - job.get("finished_at", now) > DELETE_JOB_TTL:
             DELETE_JOBS.pop(jid, None)
     while len(DELETE_JOBS) > DELETE_JOB_KEEP:
-        oldest = min(DELETE_JOBS.items(), key=lambda kv: kv[1]["started_at"])[0]
+        finished = [(jid, job) for jid, job in DELETE_JOBS.items() if job["state"] != "running"]
+        if not finished:
+            break
+        oldest = min(finished, key=lambda kv: kv[1]["started_at"])[0]
         DELETE_JOBS.pop(oldest, None)
 
 
 async def run_delete_job(job_id, ids, host, token):
     job = DELETE_JOBS[job_id]
+    # 串行删除时 500 条 * (DELETE_INTERVAL + 往返) 远超默认 180s，必然超时。
+    # 按批大小把超时底线抬起来，让「请求的批次」与「给的时间」自洽。
+    serial_floor = len(ids) * (DELETE_INTERVAL + 1.0) + 30
+    timeout = max(DELETE_TIMEOUT, serial_floor)
     try:
-        result = await asyncio.wait_for(perform_delete(ids, host, token, job), timeout=DELETE_TIMEOUT)
+        result = await asyncio.wait_for(perform_delete(ids, host, token, job), timeout=timeout)
         job.update({
             "state": "done",
             "deleted": result["deleted"],
@@ -965,11 +1075,12 @@ async def run_delete_job(job_id, ids, host, token):
         if result["deleted"] > 0:
             await wb_buffer.add(result["saved_bytes"])
     except asyncio.TimeoutError:
-        job.update({"state": "timeout", "message": f"删除超时（>{DELETE_TIMEOUT}s），请重新扫描核对结果"})
+        job.update({"state": "timeout", "message": f"删除超时（>{timeout:.0f}s），请重新扫描核对结果"})
         sys_log(f"[DELETE] ⚠️ 任务 {job_id} 超时，已发出的请求可能仍在 Emby 侧执行")
     except Exception as e:
         job.update({"state": "error", "message": f"{type(e).__name__}: {e}"})
         sys_log(f"[DELETE] ❌ 任务 {job_id} 异常: {e}")
+        logger.exception("[DELETE] 删除任务异常详情")
     finally:
         job["finished_at"] = time.time()
 
@@ -1103,6 +1214,7 @@ async def run_refresh_job(job_id, ids, host, token, full_refresh, use_secure):
     except Exception as e:
         job.update({"state": "error", "message": f"{type(e).__name__}: {e}"})
         sys_log(f"[REFRESH] ❌ 任务 {job_id} 异常: {e}")
+        logger.exception("[REFRESH] 刷新任务异常详情")
     finally:
         job["finished_at"] = time.time()
 
